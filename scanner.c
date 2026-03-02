@@ -1,8 +1,5 @@
 #include "saia.h"
-
-#ifndef _WIN32
 #include <poll.h>
-#endif
 
 static volatile int running_threads = 0;
 static volatile int verify_running_threads = 0;
@@ -304,23 +301,11 @@ static int socket_recv_exact(int fd, char *buf, size_t exact_size, int timeout_m
             remain_ms = timeout_ms - (int)elapsed;
         }
 
-#ifdef _WIN32
-        fd_set read_fds;
-        FD_ZERO(&read_fds);
-        FD_SET(fd, &read_fds);
-
-        struct timeval tv;
-        tv.tv_sec = remain_ms / 1000;
-        tv.tv_usec = (remain_ms % 1000) * 1000;
-
-        int ready = select(fd + 1, &read_fds, NULL, NULL, &tv);
-#else
         struct pollfd pfd;
         memset(&pfd, 0, sizeof(pfd));
         pfd.fd = fd;
         pfd.events = POLLIN;
         int ready = poll(&pfd, 1, remain_ms);
-#endif
         if (ready <= 0) break;
 
         int n = recv(fd, buf + total, exact_size - total, 0);
