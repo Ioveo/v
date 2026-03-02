@@ -651,7 +651,7 @@ static size_t scan_queue_size(void) {
 
 static void scanner_report_found_open(const worker_arg_t *task) {
     if (!task) return;
-    if (g_config.scan_mode == SCAN_EXPLORE_ONLY) return;
+    if (g_config.scan_mode == SCAN_EXPLORE) return;
     char result_line[1024];
     const char *tag = "[PORT_OPEN]";
     const char *detail = "端口开放";
