@@ -1324,11 +1324,11 @@ int saia_interactive_mode(void) {
                 break;
             }
             case 6:
-                /* 小鸡资源展示 — VPS 资源监控 */
+                /* 小鸡资源展示 */
                 color_cyan();
                 printf("\n>>> [6] 小鸡资源展示\n");
                 color_reset();
-                saia_vps_realtime_panel();
+                saia_print_stats(&g_state);
                 break;
 
             /* ========== 守护 ========== */
