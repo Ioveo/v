@@ -1335,6 +1335,9 @@ void *worker_thread(void *arg) {
     if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), connect_timeout_ms) != 0) {
         socket_close(fd);
         worker_arg_release(task);
+        if (g_config.scan_mode == SCAN_EXPLORE) {
+            saia_sleep(2);
+        }
         
         SAIA_ATOMIC_DEC_INT(&running_threads);
         
@@ -1691,7 +1694,7 @@ static int feed_single_target(const char *ip, void *userdata) {
     }
 
     float eff_interval = g_config.feed_interval;
-    if (g_state.threads >= 500 && eff_interval > 0.002f) {
+    if (g_state.threads >= 500 && eff_interval > 0.002f && g_config.scan_mode != SCAN_EXPLORE) {
         eff_interval = 0.0f;
     }
     if (eff_interval > 0.0f) {
@@ -1959,6 +1962,9 @@ static void *scanner_stream_worker(void *arg) {
         SAIA_ATOMIC_INC_INT(&running_threads);
 
         worker_thread(task);
+        if (g_config.scan_mode == SCAN_EXPLORE) {
+            saia_sleep(2);
+        }
     }
 #ifdef _WIN32
     return 0;
