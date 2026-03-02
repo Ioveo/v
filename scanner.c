@@ -43,6 +43,20 @@ static pthread_mutex_t lock_file = PTHREAD_MUTEX_INITIALIZER;
 #define SAIA_STRTOK_R strtok_r
 #endif
 
+#ifndef _WIN32
+#define SAIA_ATOMIC_INC_INT(p) __sync_fetch_and_add((p), 1)
+#define SAIA_ATOMIC_DEC_INT(p) __sync_fetch_and_sub((p), 1)
+#define SAIA_ATOMIC_ADD_U64(p, v) __sync_fetch_and_add((p), (v))
+#define SAIA_ATOMIC_LOAD_INT(p) __sync_fetch_and_add((p), 0)
+#define SAIA_ATOMIC_LOAD_U64(p) __sync_fetch_and_add((p), 0)
+#else
+#define SAIA_ATOMIC_INC_INT(p) do { MUTEX_LOCK(lock_stats); (*(p))++; MUTEX_UNLOCK(lock_stats); } while (0)
+#define SAIA_ATOMIC_DEC_INT(p) do { MUTEX_LOCK(lock_stats); (*(p))--; MUTEX_UNLOCK(lock_stats); } while (0)
+#define SAIA_ATOMIC_ADD_U64(p, v) do { MUTEX_LOCK(lock_stats); (*(p)) += (v); MUTEX_UNLOCK(lock_stats); } while (0)
+#define SAIA_ATOMIC_LOAD_INT(p) (*(p))
+#define SAIA_ATOMIC_LOAD_U64(p) (*(p))
+#endif
+
 static int clamp_positive_threads(int threads) {
     return (threads > 0) ? threads : 1;
 }
@@ -1026,10 +1040,8 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
         for (size_t i = 0; i < task->cred_count; i++) {
             scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
             if (verify_socks5(task->ip, task->port, task->creds[i].username, task->creds[i].password, 3000)) {
-                MUTEX_LOCK(lock_stats);
-                g_state.total_verified++;
-                g_state.s5_verified++;
-                MUTEX_UNLOCK(lock_stats);
+                SAIA_ATOMIC_ADD_U64(&g_state.total_verified, 1);
+                SAIA_ATOMIC_ADD_U64(&g_state.s5_verified, 1);
 
                 char result_line[1024];
                 snprintf(result_line, sizeof(result_line),
@@ -1043,7 +1055,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                 printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
                 MUTEX_UNLOCK(lock_file);
 
-                if (should_push_verified_now(g_state.total_verified)) {
+                if (should_push_verified_now((uint64_t)SAIA_ATOMIC_LOAD_U64(&g_state.total_verified))) {
                     char msg[1024];
                     format_compact_verified_line(task->ip, task->port,
                                                  task->creds[i].username, task->creds[i].password,
@@ -1088,10 +1100,8 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
             scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
             if (verify_xui(task->ip, task->port,
                            task->creds[i].username, task->creds[i].password, 3000)) {
-                MUTEX_LOCK(lock_stats);
-                g_state.total_verified++;
-                g_state.xui_verified++;
-                MUTEX_UNLOCK(lock_stats);
+                SAIA_ATOMIC_ADD_U64(&g_state.total_verified, 1);
+                SAIA_ATOMIC_ADD_U64(&g_state.xui_verified, 1);
 
                 char result_line[1024];
                 snprintf(result_line, sizeof(result_line),
@@ -1104,7 +1114,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                 printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
                 MUTEX_UNLOCK(lock_file);
 
-                if (should_push_verified_now(g_state.total_verified)) {
+                if (should_push_verified_now((uint64_t)SAIA_ATOMIC_LOAD_U64(&g_state.total_verified))) {
                     char msg[1024];
                     format_compact_verified_line(task->ip, task->port,
                                                  task->creds[i].username, task->creds[i].password,
@@ -1122,10 +1132,8 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                 scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
                 if (verify_socks5(task->ip, task->port,
                                   task->creds[i].username, task->creds[i].password, 3000)) {
-                    MUTEX_LOCK(lock_stats);
-                    g_state.total_verified++;
-                    g_state.s5_verified++;
-                    MUTEX_UNLOCK(lock_stats);
+                    SAIA_ATOMIC_ADD_U64(&g_state.total_verified, 1);
+                    SAIA_ATOMIC_ADD_U64(&g_state.s5_verified, 1);
 
                     char result_line[1024];
                     snprintf(result_line, sizeof(result_line),
@@ -1138,7 +1146,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                     printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
                     MUTEX_UNLOCK(lock_file);
 
-                    if (should_push_verified_now(g_state.total_verified)) {
+                    if (should_push_verified_now((uint64_t)SAIA_ATOMIC_LOAD_U64(&g_state.total_verified))) {
                         char msg[1024];
                         format_compact_verified_line(task->ip, task->port,
                                                      task->creds[i].username, task->creds[i].password,
@@ -1163,9 +1171,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
             if (!ok) ok = verify_socks5(task->ip, task->port,
                                          task->creds[i].username, task->creds[i].password, 3000);
             if (ok) {
-                MUTEX_LOCK(lock_stats);
-                g_state.total_verified++;
-                MUTEX_UNLOCK(lock_stats);
+                SAIA_ATOMIC_ADD_U64(&g_state.total_verified, 1);
 
                 char result_line[1024];
                 snprintf(result_line, sizeof(result_line),
@@ -1225,9 +1231,9 @@ static void *verify_worker_thread(void *arg) {
     scanner_run_verify_logic(task);
     free(task);
 
-    MUTEX_LOCK(lock_stats);
-    if (verify_running_threads > 0) verify_running_threads--;
-    MUTEX_UNLOCK(lock_stats);
+    if (SAIA_ATOMIC_LOAD_INT(&verify_running_threads) > 0) {
+        SAIA_ATOMIC_DEC_INT(&verify_running_threads);
+    }
 
 #ifdef _WIN32
     return 0;
@@ -1300,9 +1306,7 @@ void *worker_thread(void *arg) {
 #endif
     worker_arg_t *task = (worker_arg_t *)arg;
     // 更新扫描统计
-    MUTEX_LOCK(lock_stats);
-    g_state.total_scanned++;
-    MUTEX_UNLOCK(lock_stats);
+    SAIA_ATOMIC_ADD_U64(&g_state.total_scanned, 1);
     
     // 1. 端口连通性检查
     int fd = socket_create(0);
@@ -1316,9 +1320,7 @@ void *worker_thread(void *arg) {
         socket_close(fd);
         worker_arg_release(task);
         
-        MUTEX_LOCK(lock_stats);
-        running_threads--;
-        MUTEX_UNLOCK(lock_stats);
+        SAIA_ATOMIC_DEC_INT(&running_threads);
         
         #ifdef _WIN32
         return 0;
@@ -1346,21 +1348,20 @@ void *worker_thread(void *arg) {
     
     // 端口开放后，按模式统计“有效命中”（非纯端口开放）
     int service_hit = 0;
-    MUTEX_LOCK(lock_stats);
     if (task->work_mode == MODE_S5 && task->s5_fingerprint_ok > 0) {
         service_hit = 1;
-        g_state.s5_found++;
+        SAIA_ATOMIC_ADD_U64(&g_state.s5_found, 1);
     } else if (task->work_mode == MODE_XUI && task->xui_fingerprint_ok > 0) {
         service_hit = 1;
-        g_state.xui_found++;
+        SAIA_ATOMIC_ADD_U64(&g_state.xui_found, 1);
     } else if (task->work_mode == MODE_DEEP) {
         if (task->xui_fingerprint_ok > 0) {
             service_hit = 1;
-            g_state.xui_found++;
+            SAIA_ATOMIC_ADD_U64(&g_state.xui_found, 1);
         }
         if (task->s5_fingerprint_ok > 0) {
             service_hit = 1;
-            g_state.s5_found++;
+            SAIA_ATOMIC_ADD_U64(&g_state.s5_found, 1);
         }
     } else if (task->work_mode == MODE_VERIFY) {
         if (task->xui_fingerprint_ok > 0 || task->s5_fingerprint_ok > 0) {
@@ -1368,9 +1369,8 @@ void *worker_thread(void *arg) {
         }
     }
     if (service_hit) {
-        g_state.total_found++;
+        SAIA_ATOMIC_ADD_U64(&g_state.total_found, 1);
     }
-    MUTEX_UNLOCK(lock_stats);
 
     scanner_report_found_open(task);
 
@@ -1391,9 +1391,7 @@ void *worker_thread(void *arg) {
     
     worker_arg_release(task);
     
-    MUTEX_LOCK(lock_stats);
-    running_threads--;
-    MUTEX_UNLOCK(lock_stats);
+    SAIA_ATOMIC_DEC_INT(&running_threads);
     
     #ifdef _WIN32
     return 0;
@@ -1689,11 +1687,9 @@ static int feed_single_target(const char *ip, void *userdata) {
     uint64_t now_ms = get_current_time_ms();
     if ((now_ms >= ctx->last_progress_write_ms && (now_ms - ctx->last_progress_write_ms) >= 5000) ||
         ctx->fed_count == ctx->est_total) {
-        MUTEX_LOCK(lock_stats);
-        int rt = running_threads;
-        uint64_t scanned = g_state.total_scanned;
-        uint64_t found   = g_state.total_found;
-        MUTEX_UNLOCK(lock_stats);
+        int rt = SAIA_ATOMIC_LOAD_INT(&running_threads);
+        uint64_t scanned = SAIA_ATOMIC_LOAD_U64(&g_state.total_scanned);
+        uint64_t found   = SAIA_ATOMIC_LOAD_U64(&g_state.total_found);
         printf("\r%s进度:%s %zu/%zu  线程:%d  已扫:%llu  命中:%llu   %s",
                C_CYAN, C_RESET, ctx->fed_count, ctx->est_total, rt,
                (unsigned long long)scanned,
@@ -1840,9 +1836,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
         }
         
         // 检查并发数
-        MUTEX_LOCK(lock_stats);
-        int current = running_threads;
-        MUTEX_UNLOCK(lock_stats);
+        int current = SAIA_ATOMIC_LOAD_INT(&running_threads);
         
         if (current >= g_config.threads) {
             saia_sleep(100);
@@ -1862,9 +1856,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
             arg->s5_fingerprint_ok = -1;
             arg->s5_method = -1;
             
-            MUTEX_LOCK(lock_stats);
-            running_threads++;
-            MUTEX_UNLOCK(lock_stats);
+            SAIA_ATOMIC_INC_INT(&running_threads);
             
 #ifdef _WIN32
             _beginthreadex(NULL, 0, worker_thread, arg, 0, NULL);
@@ -1874,7 +1866,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
             pthread_detach(tid);
 #endif
 
-            if ((running_threads % 10) == 0) {
+            if ((SAIA_ATOMIC_LOAD_INT(&running_threads) % 10) == 0) {
                 saia_sleep(5);
             }
         }
@@ -1883,11 +1875,9 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
         
         // 进度显示 (每 10 个节点或最后一个刷新一次)
         if (node_idx % 10 == 0 || node_idx == node_count) {
-            MUTEX_LOCK(lock_stats);
-            int rt = running_threads;
-            uint64_t scanned = g_state.total_scanned;
-            uint64_t found   = g_state.total_found;
-            MUTEX_UNLOCK(lock_stats);
+            int rt = SAIA_ATOMIC_LOAD_INT(&running_threads);
+            uint64_t scanned = SAIA_ATOMIC_LOAD_U64(&g_state.total_scanned);
+            uint64_t found   = SAIA_ATOMIC_LOAD_U64(&g_state.total_found);
             printf("\r%s进度:%s %zu/%zu  线程:%d  已扫:%llu  命中:%llu   %s",
                    C_CYAN, C_RESET, node_idx, node_count, rt,
                    (unsigned long long)scanned,
@@ -1899,9 +1889,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
     
     // 等待剩余线程
     while (1) {
-        MUTEX_LOCK(lock_stats);
-        int remaining = running_threads;
-        MUTEX_UNLOCK(lock_stats);
+        int remaining = SAIA_ATOMIC_LOAD_INT(&running_threads);
         if (remaining <= 0) break;
         saia_sleep(500);
     }
@@ -1952,9 +1940,7 @@ static void *scanner_stream_worker(void *arg) {
             continue;
         }
 
-        MUTEX_LOCK(lock_stats);
-        running_threads++;
-        MUTEX_UNLOCK(lock_stats);
+        SAIA_ATOMIC_INC_INT(&running_threads);
 
         worker_thread(task);
     }
