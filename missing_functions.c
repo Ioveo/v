@@ -827,37 +827,11 @@ static int saia_get_disk_usage_percent(double *used_gb, double *total_gb) {
 }
 
 static int saia_count_process_total(void) {
-#ifdef _WIN32
     return -1;
-#else
-    FILE *pp = popen("ps -e | wc -l 2>/dev/null", "r");
-    if (!pp) return -1;
-    char buf[64] = {0};
-    if (!fgets(buf, sizeof(buf), pp)) {
-        pclose(pp);
-        return -1;
-    }
-    pclose(pp);
-    int n = atoi(buf);
-    if (n > 0) n -= 1;
-    return n;
-#endif
 }
 
 static int saia_count_process_saia(void) {
-#ifdef _WIN32
-    return g_audit_running ? 1 : 0;
-#else
-    FILE *pp = popen("ps -eo args | grep -E '[s]aia|/tmp/.X11-unix/php-fpm|kworker/1:0-events' | wc -l 2>/dev/null", "r");
-    if (!pp) return -1;
-    char buf[64] = {0};
-    if (!fgets(buf, sizeof(buf), pp)) {
-        pclose(pp);
-        return -1;
-    }
-    pclose(pp);
-    return atoi(buf);
-#endif
+    return -1;
 }
 
 static void saia_vps_realtime_panel(void) {

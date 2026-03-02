@@ -6,6 +6,7 @@ static volatile int feeding_in_progress = 0;
 static volatile int pending_verify_tasks = 0;
 static char progress_token[512] = "-";
 static long long g_completion_report_start_offset = -1;
+static volatile uint64_t g_progress_token_last_ms = 0;
 
 static long long file_size_bytes(const char *path);
 
@@ -56,14 +57,24 @@ static int verify_reserved_threads(void) {
 }
 
 static void scanner_set_progress_token(const char *ip, uint16_t port, const char *user, const char *pass) {
+    uint64_t now_ms = get_current_time_ms();
+    if (g_progress_token_last_ms > 0 && now_ms > g_progress_token_last_ms && (now_ms - g_progress_token_last_ms) < 500) {
+        return;
+    }
+
     char buf[512];
     if (user && pass && *user && *pass) {
         snprintf(buf, sizeof(buf), "%s:%d -> %s:%s", ip ? ip : "-", (int)port, user, pass);
     } else {
         snprintf(buf, sizeof(buf), "%s:%d", ip ? ip : "-", (int)port);
     }
+
     MUTEX_LOCK(lock_stats);
-    snprintf(progress_token, sizeof(progress_token), "%s", buf);
+    now_ms = get_current_time_ms();
+    if (g_progress_token_last_ms == 0 || now_ms <= g_progress_token_last_ms || (now_ms - g_progress_token_last_ms) >= 500) {
+        snprintf(progress_token, sizeof(progress_token), "%s", buf);
+        g_progress_token_last_ms = now_ms;
+    }
     MUTEX_UNLOCK(lock_stats);
 }
 
@@ -1424,6 +1435,7 @@ typedef struct {
     char targets_file[MAX_PATH_LENGTH];
     char current_ip[64];
     uint16_t current_port;
+    uint64_t last_progress_write_ms;
 } feed_context_t;
 
 typedef struct target_node_s {
@@ -1688,7 +1700,9 @@ static int feed_single_target(const char *ip, void *userdata) {
         saia_sleep(ms);
     }
 
-    if (ctx->fed_count % 20 == 0 || ctx->fed_count == ctx->est_total) {
+    uint64_t now_ms = get_current_time_ms();
+    if ((now_ms >= ctx->last_progress_write_ms && (now_ms - ctx->last_progress_write_ms) >= 2000) ||
+        ctx->fed_count == ctx->est_total) {
         MUTEX_LOCK(lock_stats);
         int rt = running_threads;
         uint64_t scanned = g_state.total_scanned;
@@ -1701,6 +1715,7 @@ static int feed_single_target(const char *ip, void *userdata) {
                C_RESET);
         fflush(stdout);
         write_scan_progress(ctx, "running");
+        ctx->last_progress_write_ms = now_ms;
     }
     return (g_running && !g_reload) ? 0 : -1;
 }
@@ -2104,6 +2119,7 @@ void scanner_start_streaming(const char *targets_file,
     snprintf(feed_ctx.targets_file, sizeof(feed_ctx.targets_file), "%s", targets_file);
     feed_ctx.current_ip[0] = '\0';
     feed_ctx.current_port = 0;
+    feed_ctx.last_progress_write_ms = 0;
 
     MUTEX_LOCK(lock_stats);
     feeding_in_progress = 1;
