@@ -792,7 +792,7 @@ int saia_print_menu(void) {
         snprintf(right[5], sizeof(right[5]), "审计目标: %s", pg.current_ip);
     }
     snprintf(right[6], sizeof(right[6]), "最近命中TK: %s", last_tk);
-    snprintf(right[7], sizeof(right[7]), "当前TK: %s", pg.current_token[0] ? pg.current_token : "-");
+    snprintf(right[7], sizeof(right[7]), "当前尝试TK: %s", pg.current_token[0] ? pg.current_token : "-");
 
     for (int i = 0; i < 8; i++) {
         char fit[160];
