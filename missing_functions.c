@@ -1890,7 +1890,7 @@ int saia_realtime_monitor(void) {
                                     show_mode_num == 2 ? "S5专项" :
                                     show_mode_num == 3 ? "深度全能" :
                                     show_mode_num == 4 ? "验真模式" : "未知";
-        const char *show_scan_str = show_scan_num == 1 ? "探索" :
+        const char *show_scan_str = show_scan_num == 1 ? "探索(轻扫)" :
                                     show_scan_num == 2 ? "探索+验真" :
                                     show_scan_num == 3 ? "只留极品" : "未知";
         saia_count_report_stats(g_config.report_file,
@@ -1920,7 +1920,7 @@ int saia_realtime_monitor(void) {
         }
         snprintf(right[5], sizeof(right[5]), "限流: %s", g_config.backpressure.is_throttled ? "是" : "否");
         snprintf(right[6], sizeof(right[6]), "PID:%d | 最近命中TK:%s", (int)g_state.pid, last_tk);
-        snprintf(right[7], sizeof(right[7]), "当前尝试TK: %s", pg.current_token[0] ? pg.current_token : "-");
+        snprintf(right[7], sizeof(right[7]), "当前尝试TK: %s%s", pg.current_token[0] ? pg.current_token : "-", show_scan_num == 1 ? " | 轻扫无指纹" : "");
 
         for (int i = 0; i < 8; i++) {
             char fit[180];

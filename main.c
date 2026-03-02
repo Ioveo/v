@@ -915,12 +915,15 @@ int saia_print_menu(void) {
     int show_mode = (pg.run_mode >= 1 && pg.run_mode <= 4) ? pg.run_mode : g_config.mode;
     int show_scan_mode = (pg.run_scan_mode >= 1 && pg.run_scan_mode <= 3) ? pg.run_scan_mode : g_config.scan_mode;
     int show_threads_cfg = (pg.run_threads_cfg > 0) ? pg.run_threads_cfg : g_config.threads;
+    const char *show_scan_str = show_scan_mode == 1 ? "探索(轻扫)" :
+                                show_scan_mode == 2 ? "探索+验真" :
+                                show_scan_mode == 3 ? "只留极品" : "未知";
 
     char left[8][160];
     char right[8][160];
     snprintf(left[0], sizeof(left[0]), "SAIA MASTER CONSOLE v%s %s", SAIA_VERSION, saia_menu_spinner(scan_running));
     snprintf(left[1], sizeof(left[1]), "审计:%s | 断点:%s | TG:%s", scan_running ? "运行中" : "已停止", g_config.resume_enabled ? "开" : "关", g_config.telegram_enabled ? "开" : "关");
-    snprintf(left[2], sizeof(left[2]), "模式:%d | 策略:%d | 线程设定:%d", show_mode, show_scan_mode, show_threads_cfg);
+    snprintf(left[2], sizeof(left[2]), "模式:%d | 策略:%s | 线程设定:%d", show_mode, show_scan_str, show_threads_cfg);
     snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
     snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
     snprintf(left[5], sizeof(left[5]), "S5  发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
@@ -938,7 +941,7 @@ int saia_print_menu(void) {
         snprintf(right[5], sizeof(right[5]), "审计目标: %s", pg.current_ip);
     }
     snprintf(right[6], sizeof(right[6]), "最近命中TK: %s", last_tk);
-    snprintf(right[7], sizeof(right[7]), "当前尝试TK: %s", pg.current_token[0] ? pg.current_token : "-");
+    snprintf(right[7], sizeof(right[7]), "当前尝试TK: %s%s", pg.current_token[0] ? pg.current_token : "-", show_scan_mode == 1 ? " | 轻扫无指纹" : "");
 
     for (int i = 0; i < 8; i++) {
         char fit[160];
