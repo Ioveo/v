@@ -1331,14 +1331,20 @@ void *worker_thread(void *arg) {
     }
     socket_close(fd);
 
+    /* scan_mode: 1=探索(只扫描存活), 2=探索+验真, 3=只留极品(只保留验证通过的) */
+    int do_verify = (g_config.scan_mode >= SCAN_EXPLORE_VERIFY);
+    int do_fingerprint = do_verify;
+
     task->xui_fingerprint_ok = -1;
-    if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
-        task->xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 2000);
-    }
     task->s5_fingerprint_ok = -1;
     task->s5_method = -1;
-    if (task->work_mode == MODE_S5 || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
-        task->s5_fingerprint_ok = s5_has_required_fingerprint(task->ip, task->port, 3000, &task->s5_method);
+    if (do_fingerprint) {
+        if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
+            task->xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 2000);
+        }
+        if (task->work_mode == MODE_S5 || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
+            task->s5_fingerprint_ok = s5_has_required_fingerprint(task->ip, task->port, 3000, &task->s5_method);
+        }
     }
     
     // 端口开放后，按模式统计“有效命中”（非纯端口开放）
@@ -1368,9 +1374,6 @@ void *worker_thread(void *arg) {
         g_state.total_found++;
     }
     MUTEX_UNLOCK(lock_stats);
-
-    /* scan_mode: 1=探索(只扫描存活), 2=探索+验真, 3=只留极品(只保留验证通过的) */
-    int do_verify = (g_config.scan_mode >= SCAN_EXPLORE_VERIFY);
 
     scanner_report_found_open(task);
 
