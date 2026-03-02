@@ -1197,28 +1197,60 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
 static void scanner_enqueue_verify_task(const worker_arg_t *task) {
     if (!task) return;
 
-    verify_task_t *vt = (verify_task_t *)malloc(sizeof(verify_task_t));
-    if (!vt) return;
-    memset(vt, 0, sizeof(*vt));
-    strncpy(vt->ip, task->ip, sizeof(vt->ip) - 1);
-    vt->port = task->port;
-    vt->creds = task->creds;
-    vt->cred_count = task->cred_count;
-    vt->work_mode = task->work_mode;
-    vt->xui_fingerprint_ok = task->xui_fingerprint_ok;
-    vt->s5_fingerprint_ok = task->s5_fingerprint_ok;
-    vt->s5_method = task->s5_method;
+    size_t batch_size = 10;
+    if (task->cred_count <= batch_size) {
+        verify_task_t *vt = (verify_task_t *)malloc(sizeof(verify_task_t));
+        if (!vt) return;
+        memset(vt, 0, sizeof(*vt));
+        strncpy(vt->ip, task->ip, sizeof(vt->ip) - 1);
+        vt->port = task->port;
+        vt->creds = task->creds;
+        vt->cred_count = task->cred_count;
+        vt->work_mode = task->work_mode;
+        vt->xui_fingerprint_ok = task->xui_fingerprint_ok;
+        vt->s5_fingerprint_ok = task->s5_fingerprint_ok;
+        vt->s5_method = task->s5_method;
 
-    MUTEX_LOCK(lock_stats);
-    vt->next = NULL;
-    if (verify_tail) {
-        verify_tail->next = vt;
-    } else {
-        verify_head = vt;
+        MUTEX_LOCK(lock_stats);
+        vt->next = NULL;
+        if (verify_tail) {
+            verify_tail->next = vt;
+        } else {
+            verify_head = vt;
+        }
+        verify_tail = vt;
+        pending_verify_tasks++;
+        MUTEX_UNLOCK(lock_stats);
+        return;
     }
-    verify_tail = vt;
-    pending_verify_tasks++;
-    MUTEX_UNLOCK(lock_stats);
+
+    for (size_t i = 0; i < task->cred_count; i += batch_size) {
+        size_t remain = task->cred_count - i;
+        size_t chunk = remain > batch_size ? batch_size : remain;
+
+        verify_task_t *vt = (verify_task_t *)malloc(sizeof(verify_task_t));
+        if (!vt) break;
+        memset(vt, 0, sizeof(*vt));
+        strncpy(vt->ip, task->ip, sizeof(vt->ip) - 1);
+        vt->port = task->port;
+        vt->creds = task->creds + i;
+        vt->cred_count = chunk;
+        vt->work_mode = task->work_mode;
+        vt->xui_fingerprint_ok = task->xui_fingerprint_ok;
+        vt->s5_fingerprint_ok = task->s5_fingerprint_ok;
+        vt->s5_method = task->s5_method;
+
+        MUTEX_LOCK(lock_stats);
+        vt->next = NULL;
+        if (verify_tail) {
+            verify_tail->next = vt;
+        } else {
+            verify_head = vt;
+        }
+        verify_tail = vt;
+        pending_verify_tasks++;
+        MUTEX_UNLOCK(lock_stats);
+    }
 }
 
 static int scanner_verify_cap_now(int scans_now, int feeding_now) {
