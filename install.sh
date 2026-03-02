@@ -282,12 +282,19 @@ EOF
     # 创建可直接执行的命令（无需先 source）
     SAIA_BIN_DIR="$HOME/.local/bin"
     SAIA_LAUNCHER="$SAIA_BIN_DIR/saia"
+    KK_LAUNCHER="$SAIA_BIN_DIR/kk"
     mkdir -p "$SAIA_BIN_DIR"
     cat << EOF > "$SAIA_LAUNCHER"
 #!/usr/local/bin/bash
 exec "$INSTALL_DIR/saia_manager.sh" "\$@"
 EOF
     chmod +x "$SAIA_LAUNCHER"
+
+    cat << EOF > "$KK_LAUNCHER"
+#!/usr/local/bin/bash
+exec "$INSTALL_DIR/saia_manager.sh" attach
+EOF
+    chmod +x "$KK_LAUNCHER"
 
     case "$SHELL" in
         */bash) SHELL_RC="$HOME/.bashrc" ;;
@@ -306,6 +313,14 @@ EOF
     else
         perl -pi -e "s|^alias saia=.*$|alias saia='$INSTALL_DIR/saia_manager.sh'|g" "$SHELL_RC"
         log "Alias updated in $SHELL_RC"
+    fi
+
+    if ! grep -q "alias kk=" "$SHELL_RC" 2>/dev/null; then
+        echo "alias kk='$INSTALL_DIR/saia_manager.sh attach'" >> "$SHELL_RC"
+        log "Alias kk added to $SHELL_RC"
+    else
+        perl -pi -e "s|^alias kk=.*$|alias kk='$INSTALL_DIR/saia_manager.sh attach'|g" "$SHELL_RC"
+        log "Alias kk updated in $SHELL_RC"
     fi
 }
 
