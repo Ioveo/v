@@ -31,7 +31,8 @@ void backpressure_update(backpressure_state_t *state) {
     state->last_check = now;
     
     // 检查是否达到阈值
-    int cpu_high = (state->current_cpu > state->cpu_threshold);
+    // CPU 在容器/小鸡环境下口径不稳定，禁用 CPU 触发限流
+    int cpu_high = 0;
     int mem_low = (state->current_mem < state->mem_threshold);
     
     // 内存使用 = 总内存 - 可用内存
