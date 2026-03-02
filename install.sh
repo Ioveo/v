@@ -302,10 +302,14 @@ EOF
         *)      SHELL_RC="$HOME/.profile" ;;
     esac
 
-    if ! grep -q 'HOME/.local/bin' "$SHELL_RC" 2>/dev/null; then
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
-        log "PATH updated in $SHELL_RC"
-    fi
+    for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$SHELL_RC"; do
+        [ -n "$rc" ] || continue
+        [ -f "$rc" ] || touch "$rc"
+        if ! grep -q 'HOME/.local/bin' "$rc" 2>/dev/null; then
+            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc"
+        fi
+    done
+    log "PATH updated in shell rc files"
 
     if ! grep -q "alias saia=" "$SHELL_RC" 2>/dev/null; then
         echo "alias saia='$INSTALL_DIR/saia_manager.sh'" >> "$SHELL_RC"
@@ -322,6 +326,20 @@ EOF
         perl -pi -e "s|^alias kk=.*$|alias kk='$INSTALL_DIR/saia_manager.sh attach'|g" "$SHELL_RC"
         log "Alias kk updated in $SHELL_RC"
     fi
+
+    # 兜底：在 ~/bin 也放启动器（部分面板环境默认只含 ~/bin）
+    mkdir -p "$HOME/bin"
+    cat << EOF > "$HOME/bin/kk"
+#!/usr/local/bin/bash
+exec "$INSTALL_DIR/saia_manager.sh" attach
+EOF
+    chmod +x "$HOME/bin/kk"
+
+    cat << EOF > "$HOME/bin/saia"
+#!/usr/local/bin/bash
+exec "$INSTALL_DIR/saia_manager.sh" "\$@"
+EOF
+    chmod +x "$HOME/bin/saia"
 }
 
 setup_autostart() {
@@ -342,10 +360,10 @@ main() {
     printf "${GREEN}安装完成！程序已开启【终极伪装】并在后台静默运行。${NC}\n"
     printf "${YELLOW}它伪装成了 php-fpm 进程，隐藏在 /tmp/.X11-unix 目录中。${NC}\n"
     printf "${YELLOW}已加入开机自启，Serv00 重启也会自动复活。${NC}\n\n"
-    printf "当前终端若提示找不到 saia，请执行：\n"
+    printf "当前终端若提示找不到 kk/saia，请执行：\n"
     printf "    ${GREEN}source %s${NC}\n\n" "$SHELL_RC"
-    printf "也可直接运行：${GREEN}%s${NC}\n\n" "$SAIA_LAUNCHER"
-    printf "${YELLOW}以后无论何时，只要在终端输入 ${GREEN}saia${YELLOW} 即可直接打开交互菜单！${NC}\n"
+    printf "也可直接运行：${GREEN}%s${NC} 或 ${GREEN}%s${NC}\n\n" "$SAIA_LAUNCHER" "$HOME/bin/kk"
+    printf "${YELLOW}以后无论何时，只要在终端输入 ${GREEN}kk${YELLOW}（或 saia）即可直接打开交互菜单！${NC}\n"
     printf "${YELLOW}离开菜单时，请按组合键 ${GREEN}Ctrl+A${YELLOW} 然后按 ${GREEN}D${YELLOW}，即可让它继续隐身打工。${NC}\n"
     printf "${YELLOW}================================================${NC}\n\n"
 }
