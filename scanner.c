@@ -6,7 +6,6 @@ static volatile int feeding_in_progress = 0;
 static volatile int pending_verify_tasks = 0;
 static char progress_token[512] = "-";
 static long long g_completion_report_start_offset = -1;
-static volatile uint64_t g_progress_token_last_ms = 0;
 
 static long long file_size_bytes(const char *path);
 
@@ -57,25 +56,11 @@ static int verify_reserved_threads(void) {
 }
 
 static void scanner_set_progress_token(const char *ip, uint16_t port, const char *user, const char *pass) {
-    uint64_t now_ms = get_current_time_ms();
-    if (g_progress_token_last_ms > 0 && now_ms > g_progress_token_last_ms && (now_ms - g_progress_token_last_ms) < 500) {
-        return;
-    }
-
-    char buf[512];
-    if (user && pass && *user && *pass) {
-        snprintf(buf, sizeof(buf), "%s:%d -> %s:%s", ip ? ip : "-", (int)port, user, pass);
-    } else {
-        snprintf(buf, sizeof(buf), "%s:%d", ip ? ip : "-", (int)port);
-    }
-
-    MUTEX_LOCK(lock_stats);
-    now_ms = get_current_time_ms();
-    if (g_progress_token_last_ms == 0 || now_ms <= g_progress_token_last_ms || (now_ms - g_progress_token_last_ms) >= 500) {
-        snprintf(progress_token, sizeof(progress_token), "%s", buf);
-        g_progress_token_last_ms = now_ms;
-    }
-    MUTEX_UNLOCK(lock_stats);
+    (void)ip;
+    (void)port;
+    (void)user;
+    (void)pass;
+    return;
 }
 
 // 初始化锁
@@ -632,6 +617,7 @@ static size_t scan_queue_size(void) {
 
 static void scanner_report_found_open(const worker_arg_t *task) {
     if (!task) return;
+    if (g_config.scan_mode == SCAN_EXPLORE_ONLY) return;
     char result_line[1024];
     const char *tag = "[PORT_OPEN]";
     const char *detail = "端口开放";
@@ -1701,7 +1687,7 @@ static int feed_single_target(const char *ip, void *userdata) {
     }
 
     uint64_t now_ms = get_current_time_ms();
-    if ((now_ms >= ctx->last_progress_write_ms && (now_ms - ctx->last_progress_write_ms) >= 2000) ||
+    if ((now_ms >= ctx->last_progress_write_ms && (now_ms - ctx->last_progress_write_ms) >= 5000) ||
         ctx->fed_count == ctx->est_total) {
         MUTEX_LOCK(lock_stats);
         int rt = running_threads;
