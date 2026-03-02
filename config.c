@@ -51,6 +51,8 @@ int config_init(config_t *cfg, const char *base_dir) {
     cfg->telegram_chat_id[0] = '\0';
     cfg->telegram_interval = 0;
     cfg->telegram_verified_threshold = 5;
+    cfg->verify_source = 1;
+    cfg->verify_filter = 1;
 
     // 压背控制默认配置
     cfg->backpressure.enabled = 0;
@@ -247,6 +249,14 @@ int config_load(config_t *cfg, const char *path) {
     node = json_get(root, "skip_scanned");
     cfg->skip_scanned = json_get_bool(node, 0);
 
+    node = json_get(root, "verify_source");
+    val = (int)json_get_number(node, 1);
+    if (val >= 1 && val <= 2) cfg->verify_source = val;
+
+    node = json_get(root, "verify_filter");
+    val = (int)json_get_number(node, 1);
+    if (val >= 1 && val <= 3) cfg->verify_filter = val;
+
     // 压背控制配置
     node = json_get(root, "backpressure");
     if (node && node->type == JSON_OBJECT) {
@@ -329,6 +339,8 @@ int config_save(const config_t *cfg, const char *path) {
     json_object_set(root, "verbose", json_create_bool(cfg->verbose));
     json_object_set(root, "resume_enabled", json_create_bool(cfg->resume_enabled));
     json_object_set(root, "skip_scanned", json_create_bool(cfg->skip_scanned));
+    json_object_set(root, "verify_source", json_create_number(cfg->verify_source));
+    json_object_set(root, "verify_filter", json_create_number(cfg->verify_filter));
 
     // 压背控制配置
     json_node_t *backpressure = json_create_object();

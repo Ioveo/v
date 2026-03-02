@@ -1190,6 +1190,22 @@ int saia_interactive_mode(void) {
 
                     if (threads_cfg < 1) threads_cfg = 1;
 
+                    if (mode_cfg == MODE_VERIFY) {
+                        printf("验真范围 [1=全部 2=XUI 3=S5] (当前 %d): ", g_config.verify_filter);
+                        fflush(stdout);
+                        if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+                            int vf = atoi(input);
+                            if (vf >= 1 && vf <= 3) g_config.verify_filter = vf;
+                        }
+
+                        printf("验真来源 [1=第一阶段 2=自定义(13)] (当前 %d): ", g_config.verify_source);
+                        fflush(stdout);
+                        if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+                            int vs = atoi(input);
+                            if (vs >= 1 && vs <= 2) g_config.verify_source = vs;
+                        }
+                    }
+
                     g_config.mode = mode_cfg;
                     g_config.scan_mode = scan_mode_cfg;
                     g_config.threads = threads_cfg;

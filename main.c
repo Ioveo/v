@@ -16,6 +16,152 @@ static int saia_resume_load(size_t *next_port_start, size_t *saved_port_count);
 static void saia_resume_save(size_t next_port_start, size_t port_count);
 static void saia_resume_clear(void);
 
+static int saia_extract_ip_port(const char *line, char *ip, size_t ip_sz, uint16_t *port) {
+    if (!line || !ip || ip_sz == 0 || !port) return -1;
+    const char *p = line;
+    while (*p) {
+        unsigned a, b, c, d, prt;
+        if (sscanf(p, "%u.%u.%u.%u:%u", &a, &b, &c, &d, &prt) == 5) {
+            if (a <= 255 && b <= 255 && c <= 255 && d <= 255 && prt <= 65535 && prt > 0) {
+                snprintf(ip, ip_sz, "%u.%u.%u.%u", a, b, c, d);
+                *port = (uint16_t)prt;
+                return 0;
+            }
+        }
+        p++;
+    }
+    return -1;
+}
+
+static int saia_stage1_line_type(const char *line) {
+    if (!line) return 0;
+    if (strstr(line, "|type=xui|") || strstr(line, "[XUI_FOUND]")) return 2;
+    if (strstr(line, "|type=s5|") || strstr(line, "[S5_FOUND]")) return 3;
+    return 0;
+}
+
+static int saia_build_stage2_from_stage1(int verify_filter,
+                                         char *out_nodes, size_t out_nodes_sz,
+                                         char *out_ports_raw, size_t out_ports_sz) {
+    if (!out_nodes || out_nodes_sz == 0 || !out_ports_raw || out_ports_sz == 0) return -1;
+
+    char src_stage1[MAX_PATH_LENGTH];
+    char src_report[MAX_PATH_LENGTH];
+    char out_stage2_candidates[MAX_PATH_LENGTH];
+    snprintf(src_stage1, sizeof(src_stage1), "%s/stage1_candidates.list", g_config.base_dir);
+    snprintf(src_report, sizeof(src_report), "%s", g_config.report_file);
+    snprintf(out_stage2_candidates, sizeof(out_stage2_candidates), "%s/stage2_candidates.list", g_config.base_dir);
+    snprintf(out_nodes, out_nodes_sz, "%s/stage2_nodes.list", g_config.base_dir);
+
+    file_write_all(out_stage2_candidates, "");
+    file_write_all(out_nodes, "");
+    out_ports_raw[0] = '\0';
+
+    char **lines = NULL;
+    size_t lc = 0;
+    int use_stage1 = (file_read_lines(src_stage1, &lines, &lc) == 0 && lines);
+    if (!use_stage1) {
+        lines = NULL;
+        lc = 0;
+        if (file_read_lines(src_report, &lines, &lc) != 0 || !lines) {
+            return -1;
+        }
+    }
+
+    int ports_seen[65536] = {0};
+    char **ips = NULL;
+    size_t ip_count = 0, ip_cap = 0;
+
+    for (size_t i = 0; i < lc; i++) {
+        const char *s = lines[i] ? lines[i] : "";
+        int t = saia_stage1_line_type(s);
+        if (t == 0) {
+            free(lines[i]);
+            continue;
+        }
+        if (verify_filter == 2 && t != 2) {
+            free(lines[i]);
+            continue;
+        }
+        if (verify_filter == 3 && t != 3) {
+            free(lines[i]);
+            continue;
+        }
+
+        char ip[64];
+        uint16_t port = 0;
+        if (saia_extract_ip_port(s, ip, sizeof(ip), &port) != 0) {
+            free(lines[i]);
+            continue;
+        }
+
+        if (!ports_seen[port]) {
+            ports_seen[port] = 1;
+        }
+
+        int exists = 0;
+        for (size_t k = 0; k < ip_count; k++) {
+            if (strcmp(ips[k], ip) == 0) {
+                exists = 1;
+                break;
+            }
+        }
+        if (!exists) {
+            if (ip_count == ip_cap) {
+                size_t ncap = ip_cap ? ip_cap * 2 : 256;
+                char **tmp = (char **)realloc(ips, ncap * sizeof(char *));
+                if (!tmp) {
+                    free(lines[i]);
+                    continue;
+                }
+                ips = tmp;
+                ip_cap = ncap;
+            }
+            ips[ip_count] = strdup(ip);
+            if (ips[ip_count]) ip_count++;
+        }
+
+        if (!use_stage1) {
+            char cand_line[256];
+            snprintf(cand_line, sizeof(cand_line), "%s:%u|type=%s|source=stage1\n",
+                     ip, (unsigned)port, t == 2 ? "xui" : "s5");
+            file_append(out_stage2_candidates, cand_line);
+        } else {
+            char normalized[256];
+            snprintf(normalized, sizeof(normalized), "%s:%u|type=%s|source=stage1\n",
+                     ip, (unsigned)port, t == 2 ? "xui" : "s5");
+            file_append(out_stage2_candidates, normalized);
+        }
+        free(lines[i]);
+    }
+    free(lines);
+
+    if (ip_count == 0) {
+        for (size_t i = 0; i < ip_count; i++) free(ips[i]);
+        free(ips);
+        return -1;
+    }
+
+    for (size_t i = 0; i < ip_count; i++) {
+        file_append(out_nodes, ips[i]);
+        file_append(out_nodes, "\n");
+        free(ips[i]);
+    }
+    free(ips);
+
+    int first = 1;
+    for (int p = 1; p <= 65535; p++) {
+        if (!ports_seen[p]) continue;
+        char one[16];
+        snprintf(one, sizeof(one), "%d", p);
+        if (!first) strncat(out_ports_raw, ",", out_ports_sz - strlen(out_ports_raw) - 1);
+        strncat(out_ports_raw, one, out_ports_sz - strlen(out_ports_raw) - 1);
+        first = 0;
+    }
+
+    return first ? -1 : 0;
+}
+
 static int saia_targets_file_has_entries(const char *path) {
     if (!path || !*path) return 0;
     FILE *fp = fopen(path, "r");
@@ -1086,7 +1232,15 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
 
     // 保存配置
 
-    g_config.mode = mode;
+    int requested_mode = mode;
+    int runtime_mode = mode;
+    if (requested_mode == MODE_VERIFY) {
+        if (g_config.verify_filter == 2) runtime_mode = MODE_XUI;
+        else if (g_config.verify_filter == 3) runtime_mode = MODE_S5;
+        else runtime_mode = MODE_DEEP;
+    }
+
+    g_config.mode = runtime_mode;
 
     g_config.scan_mode = scan_mode;
 
@@ -1101,7 +1255,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
 
     strncpy(g_state.ports_raw, ports_raw, sizeof(g_state.ports_raw) - 1);
 
-    g_state.mode = mode;
+    g_state.mode = runtime_mode;
 
     g_state.work_mode = scan_mode;
 
@@ -1141,6 +1295,12 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
 
     }
 
+    if (requested_mode != MODE_VERIFY) {
+        char stage1_candidates[MAX_PATH_LENGTH];
+        snprintf(stage1_candidates, sizeof(stage1_candidates), "%s/stage1_candidates.list", g_config.base_dir);
+        file_write_all(stage1_candidates, "");
+    }
+
     // 定位节点文件 — 兼容 DEJI.py 的备用文件搜索顺序
     const char *used_file = NULL;
 
@@ -1148,6 +1308,22 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
     snprintf(path_ip, sizeof(path_ip), "%s/ip.txt", g_config.base_dir);
     snprintf(path_IP, sizeof(path_IP), "%s/IP.TXT", g_config.base_dir);
     snprintf(path_nodes, sizeof(path_nodes), "%s/nodes.txt", g_config.base_dir);
+
+    char stage2_nodes[MAX_PATH_LENGTH] = {0};
+    if (requested_mode == MODE_VERIFY && g_config.verify_source == 1) {
+        char stage2_ports_raw[2048] = {0};
+        if (saia_build_stage2_from_stage1(g_config.verify_filter,
+                                          stage2_nodes, sizeof(stage2_nodes),
+                                          stage2_ports_raw, sizeof(stage2_ports_raw)) != 0) {
+            color_red();
+            printf("\n[错误] 第一阶段结果为空，无法进入第二阶段验真\n");
+            color_reset();
+            scanner_cleanup(); network_cleanup();
+            return -1;
+        }
+        used_file = stage2_nodes;
+        snprintf(ports_raw, sizeof(ports_raw), "%s", stage2_ports_raw);
+    }
 
     const char *candidates[] = {
         g_config.nodes_file,  /* base_dir/nodes.list */
@@ -1157,12 +1333,14 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
     };
     int ncand = (int)(sizeof(candidates) / sizeof(candidates[0]));
 
-    for (int ci = 0; ci < ncand; ci++) {
-        if (!candidates[ci]) continue;
-        if (!file_exists(candidates[ci])) continue;
-        if (!saia_targets_file_has_entries(candidates[ci])) continue;
-        used_file = candidates[ci];
-        break;
+    if (!used_file) {
+        for (int ci = 0; ci < ncand; ci++) {
+            if (!candidates[ci]) continue;
+            if (!file_exists(candidates[ci])) continue;
+            if (!saia_targets_file_has_entries(candidates[ci])) continue;
+            used_file = candidates[ci];
+            break;
+        }
     }
 
     if (!used_file) {

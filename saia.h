@@ -235,6 +235,8 @@ typedef struct {
     char telegram_chat_id[128];
     int telegram_interval;
     int telegram_verified_threshold;
+    int verify_source;   /* 1=stage1, 2=custom(13) */
+    int verify_filter;   /* 1=all, 2=xui, 3=s5 */
     bool resume_enabled;
     bool skip_scanned;
     uint8_t expose_secret;

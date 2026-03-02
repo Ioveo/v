@@ -624,10 +624,12 @@ static void scanner_report_found_open(const worker_arg_t *task) {
     char result_line[1024];
     const char *tag = "[PORT_OPEN]";
     const char *detail = "端口开放";
+    const char *cand_type = NULL;
 
     if (task->work_mode == MODE_S5) {
         if (task->s5_fingerprint_ok > 0) {
             tag = "[S5_FOUND]";
+            cand_type = "s5";
             if (task->s5_method == 0x00) {
                 detail = "[节点-可连通] S5-OPEN";
             } else if (task->s5_method == 0x02) {
@@ -644,9 +646,11 @@ static void scanner_report_found_open(const worker_arg_t *task) {
     } else if (task->work_mode == MODE_DEEP) {
         if (task->xui_fingerprint_ok > 0) {
             tag = "[XUI_FOUND]";
+            cand_type = "xui";
             detail = "端口开放 + XUI特征命中";
         } else if (task->s5_fingerprint_ok > 0) {
             tag = "[S5_FOUND]";
+            cand_type = "s5";
             if (task->s5_method == 0x00) {
                 detail = "[节点-可连通] S5-OPEN";
             } else if (task->s5_method == 0x02) {
@@ -663,6 +667,7 @@ static void scanner_report_found_open(const worker_arg_t *task) {
     } else if (task->work_mode == MODE_XUI) {
         if (task->xui_fingerprint_ok > 0) {
             tag = "[XUI_FOUND]";
+            cand_type = "xui";
             detail = "端口开放 + XUI特征命中";
         } else {
             tag = "[PORT_OPEN]";
@@ -676,6 +681,16 @@ static void scanner_report_found_open(const worker_arg_t *task) {
     MUTEX_LOCK(lock_file);
     file_append(g_config.report_file, result_line);
     file_append(g_config.report_file, "\n");
+
+    if (cand_type) {
+        char stage1_file[MAX_PATH_LENGTH];
+        snprintf(stage1_file, sizeof(stage1_file), "%s/stage1_candidates.list", g_config.base_dir);
+        char stage_line[256];
+        snprintf(stage_line, sizeof(stage_line), "%s:%d|type=%s|source=stage1\n",
+                 task->ip, task->port, cand_type);
+        file_append(stage1_file, stage_line);
+    }
+
     printf("\n%s%s%s\n", C_CYAN, result_line, C_RESET);
     MUTEX_UNLOCK(lock_file);
 }
