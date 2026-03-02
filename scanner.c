@@ -1,5 +1,9 @@
 #include "saia.h"
 
+#ifndef _WIN32
+#include <poll.h>
+#endif
+
 static volatile int running_threads = 0;
 static volatile int verify_running_threads = 0;
 static volatile int feeding_in_progress = 0;
@@ -7,6 +11,7 @@ static volatile int pending_verify_tasks = 0;
 static char progress_token[512] = "-";
 static long long g_completion_report_start_offset = -1;
 static FILE *g_report_fp = NULL;
+static char g_report_path[MAX_PATH_LENGTH] = {0};
 
 static long long file_size_bytes(const char *path);
 
@@ -80,13 +85,14 @@ static void scanner_set_progress_token(const char *ip, uint16_t port, const char
 
 static void scanner_report_write_line_locked(const char *line) {
     if (!line || !*line) return;
-    if (g_report_fp) {
-        fprintf(g_report_fp, "%s\n", line);
-        fflush(g_report_fp);
-    } else {
-        file_append(g_config.report_file, line);
-        file_append(g_config.report_file, "\n");
+    if (!g_report_fp) {
+        const char *rp = g_report_path[0] ? g_report_path : g_config.report_file;
+        if (!rp || !*rp) return;
+        g_report_fp = fopen(rp, "a");
+        if (!g_report_fp) return;
     }
+    fprintf(g_report_fp, "%s\n", line);
+    fflush(g_report_fp);
 }
 
 // 初始化锁
@@ -2234,7 +2240,12 @@ int scanner_init(void) {
         fclose(g_report_fp);
         g_report_fp = NULL;
     }
-    g_report_fp = fopen(g_config.report_file, "a");
+    if (g_config.report_file[0]) {
+        snprintf(g_report_path, sizeof(g_report_path), "%s", g_config.report_file);
+    } else {
+        snprintf(g_report_path, sizeof(g_report_path), "%s/audit_report.log", g_config.base_dir);
+    }
+    g_report_fp = fopen(g_report_path, "a");
     return 0;
 }
 void scanner_cleanup(void) {

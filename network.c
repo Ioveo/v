@@ -1,6 +1,10 @@
 
 #include "saia.h"
 
+#ifndef _WIN32
+#include <poll.h>
+#endif
+
 static int network_initialized = 0;
 
 int network_init(void) {
