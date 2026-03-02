@@ -1626,14 +1626,14 @@ static int feed_single_target(const char *ip, void *userdata) {
             }
 
             if (scan_queue_size() < SCAN_TASK_QUEUE_CAP) break;
-            saia_sleep(2);
+            saia_sleep(20);
         }
         if (!g_running || g_reload) break;
 
         while (g_running && !g_reload) {
             worker_arg_t *arg = worker_arg_acquire();
             if (!arg) {
-                saia_sleep(1);
+                saia_sleep(5);
                 continue;
             }
 
@@ -1649,7 +1649,7 @@ static int feed_single_target(const char *ip, void *userdata) {
 
             if (!scan_queue_push(arg)) {
                 worker_arg_release(arg);
-                saia_sleep(1);
+                saia_sleep(5);
                 continue;
             }
             break;
@@ -1947,7 +1947,7 @@ static void *scanner_stream_worker(void *arg) {
         worker_arg_t *task = scan_queue_pop();
         if (!task) {
             if (g_scan_producer_done) break;
-            saia_sleep(2);
+            saia_sleep(20);
             continue;
         }
 
