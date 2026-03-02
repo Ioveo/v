@@ -16,6 +16,25 @@ static int saia_resume_load(size_t *next_port_start, size_t *saved_port_count);
 static void saia_resume_save(size_t next_port_start, size_t port_count);
 static void saia_resume_clear(void);
 
+static int saia_targets_file_has_entries(const char *path) {
+    if (!path || !*path) return 0;
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+
+    char line[4096];
+    while (fgets(line, sizeof(line), fp)) {
+        char *hash = strchr(line, '#');
+        if (hash) *hash = '\0';
+        char *trimmed = str_trim(line);
+        if (trimmed && trimmed[0] != '\0') {
+            fclose(fp);
+            return 1;
+        }
+    }
+    fclose(fp);
+    return 0;
+}
+
 static pid_t saia_menu_read_pid_file(const char *path) {
     if (!path || !*path) return 0;
     char *raw = file_read_all(path);
@@ -1135,17 +1154,18 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
     for (int ci = 0; ci < ncand; ci++) {
         if (!candidates[ci]) continue;
         if (!file_exists(candidates[ci])) continue;
+        if (!saia_targets_file_has_entries(candidates[ci])) continue;
         used_file = candidates[ci];
         break;
     }
 
     if (!used_file) {
         color_red();
-        printf("\n[错误] 没有找到目标节点!\n");
+        printf("\n[错误] 没有找到有效目标节点!\n");
         color_reset();
         printf("请至少满足以下一项:\n");
         printf("  1. 在主菜单选 [5] 节点管理 -> 导入节点\n");
-        printf("  2. 手动创建文件: echo '1.2.3.4' >> %s\n", g_config.nodes_file);
+        printf("  2. 手动创建并写入 IP: echo '1.2.3.4' >> %s\n", g_config.nodes_file);
         printf("  3. 手动创建文件: echo '1.2.3.0/24' >> ip.txt  (支持 CIDR)↑\n\n");
         scanner_cleanup(); network_cleanup();
         return -1;

@@ -84,6 +84,50 @@ static int saia_progress_indicates_running(void) {
     return (now - updated_ms) <= 30000 ? 1 : 0;
 }
 
+static int saia_targets_file_has_entries(const char *path) {
+    if (!path || !*path) return 0;
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+
+    char line[4096];
+    while (fgets(line, sizeof(line), fp)) {
+        char *hash = strchr(line, '#');
+        if (hash) *hash = '\0';
+        char *trimmed = str_trim(line);
+        if (trimmed && trimmed[0] != '\0') {
+            fclose(fp);
+            return 1;
+        }
+    }
+    fclose(fp);
+    return 0;
+}
+
+static const char *saia_pick_valid_targets_file(char *buf_ip, size_t sz_ip,
+                                                char *buf_IP, size_t sz_IP,
+                                                char *buf_nodes, size_t sz_nodes) {
+    snprintf(buf_ip, sz_ip, "%s/ip.txt", g_config.base_dir);
+    snprintf(buf_IP, sz_IP, "%s/IP.TXT", g_config.base_dir);
+    snprintf(buf_nodes, sz_nodes, "%s/nodes.txt", g_config.base_dir);
+
+    const char *candidates[] = {
+        g_config.nodes_file,
+        buf_ip,
+        buf_IP,
+        buf_nodes,
+        "ip.txt",
+        "nodes.txt"
+    };
+    int n = (int)(sizeof(candidates) / sizeof(candidates[0]));
+    for (int i = 0; i < n; i++) {
+        if (!candidates[i] || !*candidates[i]) continue;
+        if (!file_exists(candidates[i])) continue;
+        if (!saia_targets_file_has_entries(candidates[i])) continue;
+        return candidates[i];
+    }
+    return NULL;
+}
+
 static int saia_stop_scan_session(void) {
     int issued = 0;
     pid_t pid = saia_resolve_running_pid();
@@ -1076,6 +1120,18 @@ int saia_interactive_mode(void) {
                 if (saia_is_scan_session_running()) {
                     printf("\n>>> 审计任务已在运行，请先停止或等待完成\n");
                     break;
+                }
+
+                {
+                    char path_ip[MAX_PATH_LENGTH], path_IP[MAX_PATH_LENGTH], path_nodes[MAX_PATH_LENGTH];
+                    const char *picked = saia_pick_valid_targets_file(path_ip, sizeof(path_ip), path_IP, sizeof(path_IP), path_nodes, sizeof(path_nodes));
+                    if (!picked) {
+                        color_red();
+                        printf("\n>>> 未检测到有效IP目标，禁止启动\n");
+                        color_reset();
+                        printf(">>> 请先在 [13] 更换IP列表 写入至少1条IP/CIDR\n");
+                        break;
+                    }
                 }
 
                 int port_batch_size = 30;
