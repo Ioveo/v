@@ -6,6 +6,7 @@ static volatile int feeding_in_progress = 0;
 static volatile int pending_verify_tasks = 0;
 static char progress_token[512] = "-";
 static long long g_completion_report_start_offset = -1;
+static volatile int g_progress_monitor_stop = 0;
 
 static long long file_size_bytes(const char *path);
 
@@ -1491,6 +1492,32 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
     MUTEX_UNLOCK(lock_file);
 }
 
+#ifdef _WIN32
+static unsigned __stdcall scanner_progress_monitor_thread(void *arg) {
+#else
+static void *scanner_progress_monitor_thread(void *arg) {
+#endif
+    feed_context_t *ctx = (feed_context_t *)arg;
+    if (!ctx) {
+#ifdef _WIN32
+        return 0;
+#else
+        return NULL;
+#endif
+    }
+
+    while (!g_progress_monitor_stop && g_running && !g_reload) {
+        write_scan_progress(ctx, "running");
+        saia_sleep(1000);
+    }
+
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
 static uint32_t target_hash(const char *s) {
     uint32_t h = 2166136261u;
     while (s && *s) {
@@ -2093,6 +2120,7 @@ void scanner_start_streaming(const char *targets_file,
 
     /* skip caches are preloaded once per audit session */
     write_scan_progress(&feed_ctx, "running");
+    g_progress_monitor_stop = 0;
 
     size_t worker_count = (size_t)clamp_positive_threads(g_config.threads);
     if (worker_count > 4096) worker_count = 4096;
@@ -2107,6 +2135,12 @@ void scanner_start_streaming(const char *targets_file,
     pctx.ctx = &feed_ctx;
 
 #ifdef _WIN32
+    HANDLE progress_monitor_h = NULL;
+    {
+        uintptr_t pm = _beginthreadex(NULL, 0, scanner_progress_monitor_thread, &feed_ctx, 0, NULL);
+        if (pm != 0) progress_monitor_h = (HANDLE)pm;
+    }
+
     HANDLE *worker_handles = (HANDLE *)calloc(worker_count, sizeof(HANDLE));
     size_t worker_started = 0;
     for (size_t i = 0; i < worker_count; i++) {
@@ -2138,7 +2172,19 @@ void scanner_start_streaming(const char *targets_file,
         CloseHandle(worker_handles[i]);
     }
     free(worker_handles);
+
+    g_progress_monitor_stop = 1;
+    if (progress_monitor_h) {
+        WaitForSingleObject(progress_monitor_h, INFINITE);
+        CloseHandle(progress_monitor_h);
+    }
 #else
+    pthread_t progress_monitor_tid;
+    int progress_monitor_started = 0;
+    if (pthread_create(&progress_monitor_tid, NULL, scanner_progress_monitor_thread, &feed_ctx) == 0) {
+        progress_monitor_started = 1;
+    }
+
     pthread_t *workers = (pthread_t *)calloc(worker_count, sizeof(pthread_t));
     size_t worker_started = 0;
     for (size_t i = 0; i < worker_count; i++) {
@@ -2167,6 +2213,11 @@ void scanner_start_streaming(const char *targets_file,
         pthread_join(workers[i], NULL);
     }
     free(workers);
+
+    g_progress_monitor_stop = 1;
+    if (progress_monitor_started) {
+        pthread_join(progress_monitor_tid, NULL);
+    }
 #endif
 
     MUTEX_LOCK(lock_stats);
