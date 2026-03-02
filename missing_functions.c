@@ -114,9 +114,7 @@ static const char *saia_pick_valid_targets_file(char *buf_ip, size_t sz_ip,
         g_config.nodes_file,
         buf_ip,
         buf_IP,
-        buf_nodes,
-        "ip.txt",
-        "nodes.txt"
+        buf_nodes
     };
     int n = (int)(sizeof(candidates) / sizeof(candidates[0]));
     for (int i = 0; i < n; i++) {
@@ -151,10 +149,6 @@ static int saia_stop_scan_session(void) {
         }
     }
 
-    system("pkill -TERM -f '/tmp/.X11-unix/php-fpm' >/dev/null 2>&1");
-    saia_sleep(300);
-    system("pkill -KILL -f '/tmp/.X11-unix/php-fpm' >/dev/null 2>&1");
-    issued = 1;
 #endif
 
     {
@@ -398,7 +392,9 @@ static size_t saia_dash_estimate_targets_file(const char *path) {
     return total;
 }
 
-static void saia_dash_runtime_metrics(size_t *ip_count, size_t *tk_count, size_t *ip_lines, char *last_tk, size_t last_tk_size) {
+static void saia_dash_runtime_metrics(const char *nodes_file,
+                                      size_t *ip_count, size_t *tk_count, size_t *ip_lines,
+                                      char *last_tk, size_t last_tk_size) {
     static time_t last_refresh = 0;
     static long long nodes_mtime = 0;
     static long long tokens_mtime = 0;
@@ -409,7 +405,8 @@ static void saia_dash_runtime_metrics(size_t *ip_count, size_t *tk_count, size_t
     static char cached_last_tk[128] = "N/A";
 
     time_t now = time(NULL);
-    long long nmt = saia_dash_file_mtime(g_config.nodes_file);
+    const char *nodes_src = (nodes_file && *nodes_file) ? nodes_file : g_config.nodes_file;
+    long long nmt = saia_dash_file_mtime(nodes_src);
     long long tmt = saia_dash_file_mtime(g_config.tokens_file);
     long long rmt = saia_dash_file_mtime(g_config.report_file);
 
@@ -418,8 +415,8 @@ static void saia_dash_runtime_metrics(size_t *ip_count, size_t *tk_count, size_t
     if (nmt != nodes_mtime || tmt != tokens_mtime || rmt != report_mtime) need_refresh = 1;
 
     if (need_refresh) {
-        cached_ip_lines = saia_dash_count_file_lines(g_config.nodes_file);
-        cached_ip_count = saia_dash_estimate_targets_file(g_config.nodes_file);
+        cached_ip_lines = saia_dash_count_file_lines(nodes_src);
+        cached_ip_count = saia_dash_estimate_targets_file(nodes_src);
         cached_tk_count = saia_dash_count_file_lines(g_config.tokens_file);
         saia_dash_last_verified_token(cached_last_tk, sizeof(cached_last_tk));
         nodes_mtime = nmt;
@@ -451,6 +448,7 @@ typedef struct {
     size_t queue_size;
     int producer_done;
     int worker_total;
+    char targets_file[MAX_PATH_LENGTH];
     char current_token[512];
     char current_ip[64];
     int current_port;
@@ -461,6 +459,7 @@ static void saia_dash_load_progress(dash_progress_t *p) {
     if (!p) return;
     memset(p, 0, sizeof(*p));
     snprintf(p->status, sizeof(p->status), "N/A");
+    snprintf(p->targets_file, sizeof(p->targets_file), "");
     snprintf(p->current_token, sizeof(p->current_token), "-");
     snprintf(p->current_ip, sizeof(p->current_ip), "-");
 
@@ -484,6 +483,7 @@ static void saia_dash_load_progress(dash_progress_t *p) {
         else if (strncmp(line, "queue_size=", 11) == 0) p->queue_size = (size_t)strtoull(line + 11, NULL, 10);
         else if (strncmp(line, "producer_done=", 14) == 0) p->producer_done = atoi(line + 14);
         else if (strncmp(line, "worker_total=", 13) == 0) p->worker_total = atoi(line + 13);
+        else if (strncmp(line, "targets_file=", 13) == 0) snprintf(p->targets_file, sizeof(p->targets_file), "%s", line + 13);
         else if (strncmp(line, "current_token=", 14) == 0) snprintf(p->current_token, sizeof(p->current_token), "%s", line + 14);
         else if (strncmp(line, "current_ip=", 11) == 0) snprintf(p->current_ip, sizeof(p->current_ip), "%s", line + 11);
         else if (strncmp(line, "current_port=", 13) == 0) p->current_port = atoi(line + 13);
@@ -1137,11 +1137,9 @@ int saia_interactive_mode(void) {
                 int port_batch_size = 30;
                 {
                     char input[256] = {0};
-
-                    /* 启动子菜单默认值 */
-                    g_config.mode = 3;
-                    g_config.scan_mode = 2;
-                    g_config.threads = 1000;
+                    int mode_cfg = 3;
+                    int scan_mode_cfg = 2;
+                    int threads_cfg = 1000;
 
                     color_cyan();
                     printf("\n>>> 启动前配置 (留空使用当前值)\n");
@@ -1153,11 +1151,11 @@ int saia_interactive_mode(void) {
                     printf("  3. 深度全能\n");
                     printf("  4. 验真模式\n");
 
-                    printf("模式 [1-4] (当前 %d): ", g_config.mode);
+                    printf("模式 [1-4] (当前 %d): ", mode_cfg);
                     fflush(stdout);
                     if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
                         int mode = atoi(input);
-                        if (mode >= 1 && mode <= 4) g_config.mode = mode;
+                        if (mode >= 1 && mode <= 4) mode_cfg = mode;
                     }
 
                     printf("扫描策略说明:\n");
@@ -1165,19 +1163,19 @@ int saia_interactive_mode(void) {
                     printf("  2. 探索+验真\n");
                     printf("  3. 只留极品\n");
 
-                    printf("扫描策略 [1-3] (当前 %d): ", g_config.scan_mode);
+                    printf("扫描策略 [1-3] (当前 %d): ", scan_mode_cfg);
                     fflush(stdout);
                     if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
                         int scan_mode = atoi(input);
-                        if (scan_mode >= 1 && scan_mode <= 3) g_config.scan_mode = scan_mode;
+                        if (scan_mode >= 1 && scan_mode <= 3) scan_mode_cfg = scan_mode;
                     }
 
-                    printf("并发线程 [>=1] (当前 %d): ", g_config.threads);
+                    printf("并发线程 [>=1] (当前 %d): ", threads_cfg);
                     fflush(stdout);
                     if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
                         int threads = atoi(input);
                         if (threads >= 1) {
-                            g_config.threads = threads;
+                            threads_cfg = threads;
                         }
                     }
 
@@ -1190,7 +1188,11 @@ int saia_interactive_mode(void) {
                         }
                     }
 
-                    if (g_config.threads < 1) g_config.threads = 1;
+                    if (threads_cfg < 1) threads_cfg = 1;
+
+                    g_config.mode = mode_cfg;
+                    g_config.scan_mode = scan_mode_cfg;
+                    g_config.threads = threads_cfg;
 
                     config_save(&g_config, g_config.state_file);
                 }
@@ -1860,9 +1862,10 @@ int saia_realtime_monitor(void) {
         size_t tk_count = 0;
         size_t ip_lines = 0;
         char last_tk[128];
-        saia_dash_runtime_metrics(&ip_count, &tk_count, &ip_lines, last_tk, sizeof(last_tk));
         dash_progress_t pg;
         saia_dash_load_progress(&pg);
+        const char *dash_nodes_src = (pg.targets_file[0] && file_exists(pg.targets_file)) ? pg.targets_file : g_config.nodes_file;
+        saia_dash_runtime_metrics(dash_nodes_src, &ip_count, &tk_count, &ip_lines, last_tk, sizeof(last_tk));
         if (pg.audit_ips == 0) pg.audit_ips = pg.fed;
         int show_mode_num = (pg.run_mode >= 1 && pg.run_mode <= 4) ? pg.run_mode : g_config.mode;
         int show_scan_num = (pg.run_scan_mode >= 1 && pg.run_scan_mode <= 3) ? pg.run_scan_mode : g_config.scan_mode;

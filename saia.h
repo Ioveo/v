@@ -397,6 +397,7 @@ void scanner_cleanup(void);
 void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *creds, size_t cred_count, uint16_t *ports, size_t port_count);
 void scanner_start_streaming(const char *targets_file, credential_t *creds, size_t cred_count, uint16_t *ports, size_t port_count);
 void scanner_send_completion_report(void);
+void scanner_begin_completion_window(void);
 // 单个验证函数
 int verify_socks5(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms);
 int verify_xui(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms);

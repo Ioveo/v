@@ -528,7 +528,9 @@ static void saia_get_last_verified_token(char *out, size_t out_size) {
     free(lines);
 }
 
-static void saia_menu_runtime_metrics(size_t *ip_count, size_t *tk_count, size_t *ip_lines, char *last_tk, size_t last_tk_size) {
+static void saia_menu_runtime_metrics(const char *nodes_file,
+                                      size_t *ip_count, size_t *tk_count, size_t *ip_lines,
+                                      char *last_tk, size_t last_tk_size) {
     static time_t last_refresh = 0;
     static long long nodes_mtime = 0;
     static long long tokens_mtime = 0;
@@ -539,7 +541,8 @@ static void saia_menu_runtime_metrics(size_t *ip_count, size_t *tk_count, size_t
     static char cached_last_tk[128] = "N/A";
 
     time_t now = time(NULL);
-    long long nmt = saia_file_mtime(g_config.nodes_file);
+    const char *nodes_src = (nodes_file && *nodes_file) ? nodes_file : g_config.nodes_file;
+    long long nmt = saia_file_mtime(nodes_src);
     long long tmt = saia_file_mtime(g_config.tokens_file);
     long long rmt = saia_file_mtime(g_config.report_file);
 
@@ -548,8 +551,8 @@ static void saia_menu_runtime_metrics(size_t *ip_count, size_t *tk_count, size_t
     if (nmt != nodes_mtime || tmt != tokens_mtime || rmt != report_mtime) need_refresh = 1;
 
     if (need_refresh) {
-        cached_ip_lines = saia_count_file_lines(g_config.nodes_file);
-        cached_ip_count = saia_estimate_targets_file(g_config.nodes_file);
+        cached_ip_lines = saia_count_file_lines(nodes_src);
+        cached_ip_count = saia_estimate_targets_file(nodes_src);
         cached_tk_count = saia_count_file_lines(g_config.tokens_file);
         saia_get_last_verified_token(cached_last_tk, sizeof(cached_last_tk));
         nodes_mtime = nmt;
@@ -581,6 +584,7 @@ typedef struct {
     size_t queue_size;
     int producer_done;
     int worker_total;
+    char targets_file[MAX_PATH_LENGTH];
     char current_token[512];
     char current_ip[64];
     int current_port;
@@ -591,6 +595,7 @@ static void load_scan_progress(scan_progress_t *p) {
     if (!p) return;
     memset(p, 0, sizeof(*p));
     snprintf(p->status, sizeof(p->status), "N/A");
+    snprintf(p->targets_file, sizeof(p->targets_file), "");
     snprintf(p->current_token, sizeof(p->current_token), "-");
     snprintf(p->current_ip, sizeof(p->current_ip), "-");
 
@@ -628,6 +633,8 @@ static void load_scan_progress(scan_progress_t *p) {
             p->producer_done = atoi(line + 14);
         } else if (strncmp(line, "worker_total=", 13) == 0) {
             p->worker_total = atoi(line + 13);
+        } else if (strncmp(line, "targets_file=", 13) == 0) {
+            snprintf(p->targets_file, sizeof(p->targets_file), "%s", line + 13);
         } else if (strncmp(line, "current_token=", 14) == 0) {
             snprintf(p->current_token, sizeof(p->current_token), "%s", line + 14);
         } else if (strncmp(line, "current_ip=", 11) == 0) {
@@ -750,13 +757,14 @@ int saia_print_menu(void) {
     uint64_t xui_found = 0, xui_verified = 0, s5_found = 0, s5_verified = 0, total_found = 0, total_verified = 0;
     saia_menu_count_report(&xui_found, &xui_verified, &s5_found, &s5_verified, &total_found, &total_verified);
     int scan_running = saia_menu_is_scan_running();
+    scan_progress_t pg;
+    load_scan_progress(&pg);
+    const char *menu_nodes_src = (pg.targets_file[0] && file_exists(pg.targets_file)) ? pg.targets_file : g_config.nodes_file;
     size_t ip_count = 0;
     size_t tk_count = 0;
     size_t ip_lines = 0;
     char last_tk[128];
-    saia_menu_runtime_metrics(&ip_count, &tk_count, &ip_lines, last_tk, sizeof(last_tk));
-    scan_progress_t pg;
-    load_scan_progress(&pg);
+    saia_menu_runtime_metrics(menu_nodes_src, &ip_count, &tk_count, &ip_lines, last_tk, sizeof(last_tk));
     if (pg.audit_ips == 0) pg.audit_ips = pg.fed;
     int show_mode = (pg.run_mode >= 1 && pg.run_mode <= 4) ? pg.run_mode : g_config.mode;
     int show_scan_mode = (pg.run_scan_mode >= 1 && pg.run_scan_mode <= 3) ? pg.run_scan_mode : g_config.scan_mode;
@@ -1145,9 +1153,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
         g_config.nodes_file,  /* base_dir/nodes.list */
         path_ip,              /* base_dir/ip.txt */
         path_IP,              /* base_dir/IP.TXT */
-        path_nodes,           /* base_dir/nodes.txt */
-        "ip.txt",             /* 当前目录 */
-        "nodes.txt"           /* 当前目录 */
+        path_nodes            /* base_dir/nodes.txt */
     };
     int ncand = (int)(sizeof(candidates) / sizeof(candidates[0]));
 
@@ -1166,7 +1172,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
         printf("请至少满足以下一项:\n");
         printf("  1. 在主菜单选 [5] 节点管理 -> 导入节点\n");
         printf("  2. 手动创建并写入 IP: echo '1.2.3.4' >> %s\n", g_config.nodes_file);
-        printf("  3. 手动创建文件: echo '1.2.3.0/24' >> ip.txt  (支持 CIDR)↑\n\n");
+        printf("  3. 手动创建文件: echo '1.2.3.0/24' >> %s  (支持 CIDR)↑\n\n", path_ip);
         scanner_cleanup(); network_cleanup();
         return -1;
     }
@@ -1180,12 +1186,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
     size_t token_lines = 0;
 
     file_read_lines(g_config.tokens_file, &raw_tokens, &token_lines);
-
-    if (!raw_tokens) {
-
-        file_read_lines("pass.txt", &raw_tokens, &token_lines);
-
-    }
 
     credential_t *creds = NULL;
 
@@ -1300,6 +1300,8 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
                    C_CYAN, C_RESET, start_port_index + 1, port_count);
         }
     }
+
+    scanner_begin_completion_window();
 
     if (port_count > port_batch_size) {
         for (size_t i = start_port_index; i < port_count && g_running && !g_reload; i += port_batch_size) {

@@ -5,7 +5,7 @@ static volatile int verify_running_threads = 0;
 static volatile int feeding_in_progress = 0;
 static volatile int pending_verify_tasks = 0;
 static char progress_token[512] = "-";
-static long long g_completion_report_start_offset = 0;
+static long long g_completion_report_start_offset = -1;
 
 typedef struct verify_task_s {
     char ip[64];
@@ -784,6 +784,13 @@ static void append_server_marker(char *buf, size_t cap) {
              "\n\n服务器:%s | PID:%d", host, (int)g_state.pid);
 }
 
+static int is_verified_report_line(const char *s) {
+    if (!s) return 0;
+    return (strstr(s, "[XUI_VERIFIED]") != NULL) ||
+           (strstr(s, "[S5_VERIFIED]") != NULL) ||
+           (strstr(s, "[VERIFIED]") != NULL);
+}
+
 static void format_verified_from_report_line(const char *line, char *out, size_t out_sz) {
     if (!out || out_sz == 0) return;
     out[0] = '\0';
@@ -889,7 +896,7 @@ static void send_completion_verified_report(void) {
 
     char line[4096];
     while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, "[XUI_VERIFIED]") || strstr(line, "[S5_VERIFIED]")) verified++;
+        if (is_verified_report_line(line)) verified++;
     }
     fclose(fp);
 
@@ -928,7 +935,7 @@ static void send_completion_verified_report(void) {
     snprintf(chunk, sizeof(chunk), "%s", summary);
 
     while (fgets(line, sizeof(line), fp)) {
-        if (!(strstr(line, "[XUI_VERIFIED]") || strstr(line, "[S5_VERIFIED]"))) continue;
+        if (!is_verified_report_line(line)) continue;
 
         char one[256];
         format_verified_from_report_line(line, one, sizeof(one));
@@ -956,6 +963,17 @@ static void send_completion_verified_report(void) {
 
 void scanner_send_completion_report(void) {
     send_completion_verified_report();
+}
+
+void scanner_begin_completion_window(void) {
+    const char *report_path = g_config.report_file[0] ? g_config.report_file : NULL;
+    if (!report_path || !*report_path) {
+        static char fallback_report[MAX_PATH_LENGTH];
+        snprintf(fallback_report, sizeof(fallback_report), "%s/audit_report.log", g_config.base_dir);
+        report_path = fallback_report;
+    }
+    long long sz = file_size_bytes(report_path);
+    g_completion_report_start_offset = (sz > 0) ? sz : 0;
 }
 
 static void format_compact_verified_line(const char *ip, uint16_t port,
@@ -1383,6 +1401,7 @@ typedef struct {
     char resume_checkpoint_file[MAX_PATH_LENGTH];
     char history_file[MAX_PATH_LENGTH];
     char progress_file[MAX_PATH_LENGTH];
+    char targets_file[MAX_PATH_LENGTH];
     char current_ip[64];
     uint16_t current_port;
 } feed_context_t;
@@ -1440,6 +1459,7 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
              "queue_size=%zu\n"
              "producer_done=%d\n"
              "worker_total=%d\n"
+             "targets_file=%s\n"
              "current_token=%s\n"
              "current_ip=%s\n"
              "current_port=%u\n"
@@ -1458,6 +1478,7 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
              queue_now,
              producer_done,
              worker_total,
+             ctx->targets_file[0] ? ctx->targets_file : "-",
              tk_line,
              ctx->current_ip[0] ? ctx->current_ip : "-",
              (unsigned)ctx->current_port,
@@ -2006,18 +2027,6 @@ void scanner_start_streaming(const char *targets_file,
     snprintf(progress_token, sizeof(progress_token), "-");
     MUTEX_UNLOCK(lock_stats);
 
-    g_completion_report_start_offset = 0;
-    {
-        const char *report_path = g_config.report_file[0] ? g_config.report_file : NULL;
-        if (!report_path || !*report_path) {
-            static char fallback_report[MAX_PATH_LENGTH];
-            snprintf(fallback_report, sizeof(fallback_report), "%s/audit_report.log", g_config.base_dir);
-            report_path = fallback_report;
-        }
-        long long sz = file_size_bytes(report_path);
-        if (sz > 0) g_completion_report_start_offset = sz;
-    }
-
     /* 快速估算总目标数 — 文件流式读取，不整体加载到内存 */
     size_t est_total = scanner_estimate_targets_from_file(targets_file);
     printf("开始扫描... 预估目标: %zu, 总端口: %zu\n", est_total, port_count);
@@ -2072,6 +2081,7 @@ void scanner_start_streaming(const char *targets_file,
     snprintf(feed_ctx.resume_checkpoint_file, sizeof(feed_ctx.resume_checkpoint_file), "%s/resume_targets.chk", g_config.base_dir);
     snprintf(feed_ctx.history_file, sizeof(feed_ctx.history_file), "%s/scanned_history.log", g_config.base_dir);
     snprintf(feed_ctx.progress_file, sizeof(feed_ctx.progress_file), "%s/scan_progress.dat", g_config.base_dir);
+    snprintf(feed_ctx.targets_file, sizeof(feed_ctx.targets_file), "%s", targets_file);
     feed_ctx.current_ip[0] = '\0';
     feed_ctx.current_port = 0;
 
