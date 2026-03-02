@@ -6,6 +6,7 @@ static volatile int feeding_in_progress = 0;
 static volatile int pending_verify_tasks = 0;
 static char progress_token[512] = "-";
 static long long g_completion_report_start_offset = -1;
+static FILE *g_report_fp = NULL;
 
 static long long file_size_bytes(const char *path);
 
@@ -75,6 +76,17 @@ static void scanner_set_progress_token(const char *ip, uint16_t port, const char
     (void)user;
     (void)pass;
     return;
+}
+
+static void scanner_report_write_line_locked(const char *line) {
+    if (!line || !*line) return;
+    if (g_report_fp) {
+        fprintf(g_report_fp, "%s\n", line);
+        fflush(g_report_fp);
+    } else {
+        file_append(g_config.report_file, line);
+        file_append(g_config.report_file, "\n");
+    }
 }
 
 // 初始化锁
@@ -286,6 +298,7 @@ static int socket_recv_exact(int fd, char *buf, size_t exact_size, int timeout_m
             remain_ms = timeout_ms - (int)elapsed;
         }
 
+#ifdef _WIN32
         fd_set read_fds;
         FD_ZERO(&read_fds);
         FD_SET(fd, &read_fds);
@@ -295,6 +308,13 @@ static int socket_recv_exact(int fd, char *buf, size_t exact_size, int timeout_m
         tv.tv_usec = (remain_ms % 1000) * 1000;
 
         int ready = select(fd + 1, &read_fds, NULL, NULL, &tv);
+#else
+        struct pollfd pfd;
+        memset(&pfd, 0, sizeof(pfd));
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        int ready = poll(&pfd, 1, remain_ms);
+#endif
         if (ready <= 0) break;
 
         int n = recv(fd, buf + total, exact_size - total, 0);
@@ -690,8 +710,7 @@ static void scanner_report_found_open(const worker_arg_t *task) {
              "%s %s:%d | %s",
              tag, task->ip, task->port, detail);
     MUTEX_LOCK(lock_file);
-    file_append(g_config.report_file, result_line);
-    file_append(g_config.report_file, "\n");
+    scanner_report_write_line_locked(result_line);
 
     if (cand_type) {
         char stage1_file[MAX_PATH_LENGTH];
@@ -1050,8 +1069,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                          task->creds[i].username, task->creds[i].password);
 
                 MUTEX_LOCK(lock_file);
-                file_append(g_config.report_file, result_line);
-                file_append(g_config.report_file, "\n");
+                scanner_report_write_line_locked(result_line);
                 printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
                 MUTEX_UNLOCK(lock_file);
 
@@ -1083,8 +1101,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                          task->ip, task->port);
             }
             MUTEX_LOCK(lock_file);
-            file_append(g_config.report_file, result_line);
-            file_append(g_config.report_file, "\n");
+            scanner_report_write_line_locked(result_line);
             printf("\n%s%s%s\n", C_CYAN, result_line, C_RESET);
             MUTEX_UNLOCK(lock_file);
         }
@@ -1109,8 +1126,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                          task->ip, task->port,
                          task->creds[i].username, task->creds[i].password);
                 MUTEX_LOCK(lock_file);
-                file_append(g_config.report_file, result_line);
-                file_append(g_config.report_file, "\n");
+                scanner_report_write_line_locked(result_line);
                 printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
                 MUTEX_UNLOCK(lock_file);
 
@@ -1141,8 +1157,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                              task->ip, task->port,
                              task->creds[i].username, task->creds[i].password);
                     MUTEX_LOCK(lock_file);
-                    file_append(g_config.report_file, result_line);
-                    file_append(g_config.report_file, "\n");
+                    scanner_report_write_line_locked(result_line);
                     printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
                     MUTEX_UNLOCK(lock_file);
 
@@ -1179,8 +1194,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                          task->ip, task->port,
                          task->creds[i].username, task->creds[i].password);
                 MUTEX_LOCK(lock_file);
-                file_append(g_config.report_file, result_line);
-                file_append(g_config.report_file, "\n");
+                scanner_report_write_line_locked(result_line);
                 printf("\n%s%s%s\n", C_HOT, result_line, C_RESET);
                 MUTEX_UNLOCK(lock_file);
                 break;
@@ -1316,7 +1330,9 @@ void *worker_thread(void *arg) {
     addr.sin_port = htons(task->port);
     inet_pton(AF_INET, task->ip, &addr.sin_addr);
     
-    if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), 1000) != 0) {
+    int connect_timeout_ms = g_config.timeout > 0 ? (g_config.timeout * 1000) : 1500;
+    if (connect_timeout_ms < 1500) connect_timeout_ms = 1500;
+    if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), connect_timeout_ms) != 0) {
         socket_close(fd);
         worker_arg_release(task);
         
@@ -2207,7 +2223,14 @@ void scanner_start_streaming(const char *targets_file,
 }
 
 // 占位符接口实现
-int scanner_init(void) { return 0; }
+int scanner_init(void) {
+    if (g_report_fp) {
+        fclose(g_report_fp);
+        g_report_fp = NULL;
+    }
+    g_report_fp = fopen(g_config.report_file, "a");
+    return 0;
+}
 void scanner_cleanup(void) {
     MUTEX_LOCK(lock_stats);
     while (verify_head) {
@@ -2238,6 +2261,12 @@ void scanner_cleanup(void) {
     g_skip_cache_ready = 0;
     g_skip_cache_resume_enabled = 0;
     g_skip_cache_history_enabled = 0;
+
+    if (g_report_fp) {
+        fflush(g_report_fp);
+        fclose(g_report_fp);
+        g_report_fp = NULL;
+    }
 }
 // scanner_run 已经被新的逻辑替代，这里仅保留兼容性
 int scanner_run(scan_target_t *target) { 

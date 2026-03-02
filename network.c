@@ -145,19 +145,25 @@ int socket_connect_timeout(int fd, const struct sockaddr *addr, socklen_t addrle
     }
     #endif
     
+#ifdef _WIN32
     fd_set write_fds;
     FD_ZERO(&write_fds);
     FD_SET(fd, &write_fds);
-    
+
     struct timeval tv;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
-    
+
     result = select(fd + 1, NULL, &write_fds, NULL, &tv);
-    
-    if (result <= 0) {
-        return -1;
-    }
+    if (result <= 0) return -1;
+#else
+    struct pollfd pfd;
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLOUT;
+    result = poll(&pfd, 1, timeout_ms);
+    if (result <= 0) return -1;
+#endif
     
     int error = 0;
     socklen_t len = sizeof(error);
@@ -171,6 +177,7 @@ int socket_send_all(int fd, const char *data, size_t len, int timeout_ms) {
 
     size_t sent_total = 0;
     while (sent_total < len) {
+#ifdef _WIN32
         fd_set write_fds;
         FD_ZERO(&write_fds);
         FD_SET(fd, &write_fds);
@@ -182,6 +189,15 @@ int socket_send_all(int fd, const char *data, size_t len, int timeout_ms) {
         if (select(fd + 1, NULL, &write_fds, NULL, &tv) <= 0) {
             return -1;
         }
+#else
+        struct pollfd pfd;
+        memset(&pfd, 0, sizeof(pfd));
+        pfd.fd = fd;
+        pfd.events = POLLOUT;
+        if (poll(&pfd, 1, timeout_ms) <= 0) {
+            return -1;
+        }
+#endif
 
         int n = send(fd, data + sent_total, len - sent_total, 0);
         if (n <= 0) {
@@ -195,18 +211,28 @@ int socket_send_all(int fd, const char *data, size_t len, int timeout_ms) {
 
 int socket_recv_until(int fd, char *buf, size_t size, const char *delimiter, int timeout_ms) {
     if (fd < 0 || !buf || size == 0) return -1;
-    
+
+#ifdef _WIN32
     fd_set read_fds;
     FD_ZERO(&read_fds);
     FD_SET(fd, &read_fds);
-    
+
     struct timeval tv;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
-    
+
     if (select(fd + 1, &read_fds, NULL, NULL, &tv) <= 0) {
         return -1;
     }
+#else
+    struct pollfd pfd;
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    if (poll(&pfd, 1, timeout_ms) <= 0) {
+        return -1;
+    }
+#endif
     
     size_t recv_cap = size;
     if (delimiter) {
