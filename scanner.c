@@ -1330,8 +1330,7 @@ void *worker_thread(void *arg) {
     addr.sin_port = htons(task->port);
     inet_pton(AF_INET, task->ip, &addr.sin_addr);
     
-    int connect_timeout_ms = g_config.timeout > 0 ? (g_config.timeout * 1000) : 1500;
-    if (connect_timeout_ms < 1500) connect_timeout_ms = 1500;
+    int connect_timeout_ms = g_config.timeout > 0 ? (g_config.timeout * 1000) : 500;
     if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), connect_timeout_ms) != 0) {
         socket_close(fd);
         worker_arg_release(task);
