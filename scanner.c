@@ -7,6 +7,8 @@ static volatile int pending_verify_tasks = 0;
 static char progress_token[512] = "-";
 static long long g_completion_report_start_offset = -1;
 
+static long long file_size_bytes(const char *path);
+
 typedef struct verify_task_s {
     char ip[64];
     uint16_t port;
