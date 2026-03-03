@@ -643,7 +643,6 @@ static size_t scan_queue_size(void) {
 
 static void scanner_report_found_open(const worker_arg_t *task) {
     if (!task) return;
-    if (g_config.scan_mode == SCAN_EXPLORE) return;
     char result_line[1024];
     const char *tag = "[PORT_OPEN]";
     const char *detail = "端口开放";
@@ -697,6 +696,8 @@ static void scanner_report_found_open(const worker_arg_t *task) {
             detail = "端口开放(无XUI特征)";
         }
     }
+
+    if (g_config.scan_mode == SCAN_EXPLORE && !cand_type) return;
 
     snprintf(result_line, sizeof(result_line),
              "%s %s:%d | %s",
@@ -1383,7 +1384,9 @@ void *worker_thread(void *arg) {
 
     /* scan_mode: 1=探索(只扫描存活), 2=探索+验真, 3=只留极品(只保留验证通过的) */
     int do_verify = (g_config.scan_mode >= SCAN_EXPLORE_VERIFY);
-    int do_fingerprint = do_verify;
+    int do_fingerprint =
+        (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY ||
+         task->work_mode == MODE_S5);
 
     task->xui_fingerprint_ok = -1;
     task->s5_fingerprint_ok = -1;
