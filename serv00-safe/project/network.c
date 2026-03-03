@@ -129,6 +129,40 @@ int ip_is_valid(const char *str) {
     return ip_parse(str, &addr) == 0;
 }
 
+int dns_resolve(const char *hostname, char *ip_buf, size_t size) {
+    if (!hostname || !*hostname || !ip_buf || size == 0) return -1;
+
+    struct in_addr direct_ip;
+    if (inet_pton(AF_INET, hostname, &direct_ip) == 1) {
+        strncpy(ip_buf, hostname, size - 1);
+        ip_buf[size - 1] = '\0';
+        return 0;
+    }
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(hostname, NULL, &hints, &res) != 0 || !res) {
+        return -1;
+    }
+
+    int ok = -1;
+    for (struct addrinfo *it = res; it; it = it->ai_next) {
+        if (it->ai_family != AF_INET || !it->ai_addr) continue;
+        struct sockaddr_in *sin = (struct sockaddr_in *)it->ai_addr;
+        if (inet_ntop(AF_INET, &sin->sin_addr, ip_buf, (socklen_t)size)) {
+            ok = 0;
+            break;
+        }
+    }
+
+    freeaddrinfo(res);
+    return ok;
+}
+
 int socket_connect_timeout(int fd, const struct sockaddr *addr, socklen_t addrlen, int timeout_ms) {
     socket_set_nonblocking(fd);
     
