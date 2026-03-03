@@ -1262,12 +1262,6 @@ static void scanner_enqueue_verify_task(const worker_arg_t *task) {
     }
 }
 
-static int scanner_verify_cap_now(int scans_now, int feeding_now) {
-    int reserve = verify_reserved_threads();
-    if (feeding_now || scans_now > 0) return reserve;
-    return clamp_positive_threads(g_config.threads);
-}
-
 #ifdef _WIN32
 static unsigned __stdcall verify_worker_thread(void *arg) {
 #else

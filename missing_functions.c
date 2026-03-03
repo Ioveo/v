@@ -1788,40 +1788,6 @@ static int visible_width(const char *s) {
     return w;
 }
 
-/* 单行带边框输出，自动补齐 */
-static void render_panel_line(const char *text, int inner) {
-    int w = visible_width(text);
-    int pad = inner - 1 - w;
-    if (pad < 0) pad = 0;
-    printf("%s┃ %s%*s%s┃%s\n", C_BLUE, text, pad, "", C_BLUE, C_RESET);
-}
-
-/* 单板构建 */
-static void render_single_panel(const char *title, const char **lines, int nlines, int inner, int rows) {
-    /* 上边框 */
-    printf("%s┏", C_BLUE);
-    for (int i = 0; i < inner; i++) printf("━");
-    printf("┓%s\n", C_RESET);
-    /* 标题 */
-    render_panel_line(title, inner);
-    /* 分隔 */
-    printf("%s┣", C_BLUE);
-    for (int i = 0; i < inner; i++) printf("━");
-    printf("┫%s\n", C_RESET);
-    /* 内容行 */
-    int shown = 0;
-    for (int i = 0; i < nlines && shown < rows; i++, shown++)
-        render_panel_line(lines[i], inner);
-    while (shown < rows) {
-        render_panel_line("", inner);
-        shown++;
-    }
-    /* 下边框 */
-    printf("%s┗", C_BLUE);
-    for (int i = 0; i < inner; i++) printf("━");
-    printf("┛%s\n", C_RESET);
-}
-
 /* 实时监控: 读取 sys_audit_state.json 并显示双栏大屏 */
 int saia_realtime_monitor(void) {
     while (g_running) {
