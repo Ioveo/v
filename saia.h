@@ -373,7 +373,7 @@ int parse_ip_port_user_pass(const char *line, ip_port_t *addr, credential_t *cre
 // network.c
 int network_init(void);
 void network_cleanup(void);
-int socket_create(int ipv6);
+int socket_create(int ipv6, int is_verify);
 int socket_connect_timeout(int fd, const struct sockaddr *addr, int addrlen, int timeout_ms);
 int socket_set_nonblocking(int fd);
 int socket_set_timeout(int fd, int sec);
@@ -403,7 +403,7 @@ void scanner_send_completion_report(void);
 void scanner_begin_completion_window(void);
 // 单个验证函数
 int verify_socks5(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms);
-int verify_xui(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms);
+int verify_xui(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms, int xui_fingerprint_ok);
 
 // json_parser.c
 json_node_t* json_parse(const char *json_str); // 需要实现

@@ -26,6 +26,14 @@ typedef struct verify_task_s {
 
 static verify_task_t *verify_head = NULL;
 static verify_task_t *verify_tail = NULL;
+static volatile int g_verify_pool_stop = 0;
+static int g_verify_pool_size = 0;
+#define VERIFY_POOL_MAX 10
+#ifdef _WIN32
+static HANDLE g_verify_pool_threads[VERIFY_POOL_MAX] = {0};
+#else
+static pthread_t g_verify_pool_threads[VERIFY_POOL_MAX];
+#endif
 #ifdef _WIN32
 static HANDLE lock_stats;
 static HANDLE lock_file;
@@ -105,7 +113,7 @@ void init_locks() {
 static int socket_recv_exact(int fd, char *buf, size_t exact_size, int timeout_ms);
 
 int verify_socks5(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms) {
-    int fd = socket_create(0);
+    int fd = socket_create(0, 1);
     if (fd < 0) return 0;
     
     struct sockaddr_in addr;
@@ -414,7 +422,8 @@ static int xui_auth_success(const http_response_t *res) {
     return 0;
 }
 
-int verify_xui(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms) {
+int verify_xui(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms, int xui_fingerprint_ok) {
+    if (xui_fingerprint_ok <= 0) return 0;
     if (!ip || !*ip || !user || !pass) return 0;
 
     typedef struct { char path[96]; int ssl; } probe_t;
@@ -754,7 +763,7 @@ static int s5_has_required_fingerprint(const char *ip, uint16_t port, int timeou
     inet_pton(AF_INET, ip, &addr.sin_addr);
 
     for (int attempt = 0; attempt < 2; attempt++) {
-        int fd = socket_create(0);
+        int fd = socket_create(0, 1);
         if (fd < 0) return 0;
 
         if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), timeout_ms) != 0) {
@@ -1107,7 +1116,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
         for (size_t i = 0; i < task->cred_count && xui_fingerprint_ok; i++) {
             scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
             if (verify_xui(task->ip, task->port,
-                           task->creds[i].username, task->creds[i].password, 3000)) {
+                           task->creds[i].username, task->creds[i].password, 3000, xui_fingerprint_ok)) {
                 SAIA_ATOMIC_ADD_U64(&g_state.total_verified, 1);
                 SAIA_ATOMIC_ADD_U64(&g_state.xui_verified, 1);
 
@@ -1172,7 +1181,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
             int ok = 0;
             if (xui_fingerprint_ok) {
                 ok = verify_xui(task->ip, task->port,
-                                task->creds[i].username, task->creds[i].password, 3000);
+                                task->creds[i].username, task->creds[i].password, 3000, xui_fingerprint_ok);
             }
             if (!ok) ok = verify_socks5(task->ip, task->port,
                                          task->creds[i].username, task->creds[i].password, 3000);
@@ -1264,12 +1273,33 @@ static unsigned __stdcall verify_worker_thread(void *arg) {
 #else
 static void *verify_worker_thread(void *arg) {
 #endif
-    verify_task_t *task = (verify_task_t *)arg;
-    scanner_run_verify_logic(task);
-    free(task);
+    (void)arg;
+    while (1) {
+        verify_task_t *task = NULL;
 
-    if (SAIA_ATOMIC_LOAD_INT(&verify_running_threads) > 0) {
-        SAIA_ATOMIC_DEC_INT(&verify_running_threads);
+        MUTEX_LOCK(lock_stats);
+        if (verify_head) {
+            task = verify_head;
+            verify_head = verify_head->next;
+            if (!verify_head) verify_tail = NULL;
+            if (pending_verify_tasks > 0) pending_verify_tasks--;
+            verify_running_threads++;
+        }
+        int stop_now = g_verify_pool_stop;
+        MUTEX_UNLOCK(lock_stats);
+
+        if (!task) {
+            if (stop_now) break;
+            saia_sleep(10);
+            continue;
+        }
+
+        scanner_run_verify_logic(task);
+        free(task);
+
+        if (SAIA_ATOMIC_LOAD_INT(&verify_running_threads) > 0) {
+            SAIA_ATOMIC_DEC_INT(&verify_running_threads);
+        }
     }
 
 #ifdef _WIN32
@@ -1280,59 +1310,47 @@ static void *verify_worker_thread(void *arg) {
 }
 
 static void scanner_pump_verify_workers(void) {
-    while (1) {
-        verify_task_t *task = NULL;
-        int can_start = 0;
+    /* verify workers are now fixed pool threads */
+}
 
-        MUTEX_LOCK(lock_stats);
-        int total_threads = clamp_positive_threads(g_config.threads);
-        int scans_now = running_threads;
-        int feeding_now = feeding_in_progress;
-        int verify_cap = scanner_verify_cap_now(scans_now, feeding_now);
-        int total_running = running_threads + verify_running_threads;
+static void scanner_start_verify_pool(int desired) {
+    if (desired < 1) desired = 1;
+    if (desired > VERIFY_POOL_MAX) desired = VERIFY_POOL_MAX;
 
-        if (pending_verify_tasks > 0 && verify_head &&
-            verify_running_threads < verify_cap &&
-            total_running < total_threads) {
-            task = verify_head;
-            verify_head = verify_head->next;
-            if (!verify_head) verify_tail = NULL;
-            pending_verify_tasks--;
-            verify_running_threads++;
-            can_start = 1;
-        }
-        MUTEX_UNLOCK(lock_stats);
+    MUTEX_LOCK(lock_stats);
+    g_verify_pool_stop = 0;
+    g_verify_pool_size = 0;
+    MUTEX_UNLOCK(lock_stats);
 
-        if (!can_start || !task) break;
-
+    for (int i = 0; i < desired; i++) {
 #ifdef _WIN32
-        uintptr_t tid = _beginthreadex(NULL, 0, verify_worker_thread, task, 0, NULL);
-        if (tid == 0) {
-            MUTEX_LOCK(lock_stats);
-            verify_running_threads--;
-            pending_verify_tasks++;
-            task->next = verify_head;
-            verify_head = task;
-            if (!verify_tail) verify_tail = task;
-            MUTEX_UNLOCK(lock_stats);
-            break;
-        }
-        CloseHandle((HANDLE)tid);
+        uintptr_t tid = _beginthreadex(NULL, 0, verify_worker_thread, NULL, 0, NULL);
+        if (tid == 0) break;
+        g_verify_pool_threads[g_verify_pool_size++] = (HANDLE)tid;
 #else
-        pthread_t tid;
-        if (pthread_create(&tid, NULL, verify_worker_thread, task) != 0) {
-            MUTEX_LOCK(lock_stats);
-            verify_running_threads--;
-            pending_verify_tasks++;
-            task->next = verify_head;
-            verify_head = task;
-            if (!verify_tail) verify_tail = task;
-            MUTEX_UNLOCK(lock_stats);
+        if (pthread_create(&g_verify_pool_threads[g_verify_pool_size], NULL, verify_worker_thread, NULL) != 0) {
             break;
         }
-        pthread_detach(tid);
+        g_verify_pool_size++;
 #endif
     }
+}
+
+static void scanner_stop_verify_pool(void) {
+    MUTEX_LOCK(lock_stats);
+    g_verify_pool_stop = 1;
+    MUTEX_UNLOCK(lock_stats);
+
+    for (int i = 0; i < g_verify_pool_size; i++) {
+#ifdef _WIN32
+        WaitForSingleObject(g_verify_pool_threads[i], INFINITE);
+        CloseHandle(g_verify_pool_threads[i]);
+        g_verify_pool_threads[i] = NULL;
+#else
+        pthread_join(g_verify_pool_threads[i], NULL);
+#endif
+    }
+    g_verify_pool_size = 0;
 }
 
 // 工作线程函数
@@ -1346,8 +1364,9 @@ void *worker_thread(void *arg) {
     SAIA_ATOMIC_ADD_U64(&g_state.total_scanned, 1);
     
     // 1. 端口连通性检查
-    int fd = socket_create(0);
+    int fd = socket_create(0, 0);
     if (fd < 0) {
+        saia_sleep(5);
         worker_arg_release(task);
         SAIA_ATOMIC_DEC_INT(&running_threads);
 #ifdef _WIN32
@@ -1547,7 +1566,22 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
              (unsigned long long)get_current_time_ms());
 
     MUTEX_LOCK(lock_file);
-    file_write_all(ctx->progress_file, payload);
+    char tmp_path[MAX_PATH_LENGTH + 8];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", ctx->progress_file);
+    FILE *fp = fopen(tmp_path, "wb");
+    if (fp) {
+        size_t n = fwrite(payload, 1, strlen(payload), fp);
+        if (n == strlen(payload)) {
+            fflush(fp);
+        }
+        fclose(fp);
+        if (rename(tmp_path, ctx->progress_file) != 0) {
+            file_write_all(ctx->progress_file, payload);
+            file_remove(tmp_path);
+        }
+    } else {
+        file_write_all(ctx->progress_file, payload);
+    }
     MUTEX_UNLOCK(lock_file);
 }
 
@@ -1867,6 +1901,7 @@ static int iterate_expanded_targets(const char *raw_target,
 // 启动扫描 — 流式展开 IP 段，逐个投喂线程池（对齐 DEJI.py iter_expanded_targets 逻辑）
 void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *creds, size_t cred_count, uint16_t *ports, size_t port_count) {
     init_locks();
+    scanner_start_verify_pool(8);
     printf("开始扫描... 总节点: %zu, 总端口: %zu\n", node_count, port_count);
     
     size_t node_idx = 0;
@@ -1939,6 +1974,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
         if (remaining <= 0) break;
         saia_sleep(500);
     }
+    scanner_stop_verify_pool();
     
     printf("\n扫描结束\n");
 }
@@ -2069,6 +2105,8 @@ void scanner_start_streaming(const char *targets_file,
         printf("[错误] 目标文件为空，无法开始扫描\n");
         return;
     }
+
+    scanner_start_verify_pool(8);
 
     MUTEX_LOCK(lock_stats);
     while (verify_head) {
@@ -2239,6 +2277,8 @@ void scanner_start_streaming(const char *targets_file,
         if (remaining <= 0 && verifying <= 0 && queued <= 0) break;
         saia_sleep(200);
     }
+
+    scanner_stop_verify_pool();
 
     printf("\n扫描结束\n");
     const char *final_status = (g_running && !g_reload) ? "completed" : "stopped";
