@@ -146,7 +146,7 @@ static http_response_t* http_socket_request(const char *method, const char *url,
     addr.sin_port = htons(port);
     inet_pton(AF_INET, ip, &addr.sin_addr);
     
-    int fd = socket_create(0);
+    int fd = socket_create(0, 1);
     if (fd < 0) return NULL;
     
     if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), timeout_ms) != 0) {
