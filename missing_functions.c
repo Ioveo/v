@@ -564,9 +564,6 @@ static void saia_format_verified_compact(const char *line, char *out, size_t out
 
 #ifdef _WIN32
 static unsigned __stdcall saia_audit_thread_entry(void *arg) {
-#else
-static void *saia_audit_thread_entry(void *arg) {
-#endif
     audit_launch_args_t *launch = (audit_launch_args_t *)arg;
     g_reload = 0;
 
@@ -577,11 +574,7 @@ static void *saia_audit_thread_entry(void *arg) {
 
     g_audit_running = 0;
 
-#ifdef _WIN32
     return 0;
-#else
-    return NULL;
-#endif
 }
 
 static int saia_start_audit_async(int mode, int scan_mode, int threads, int port_batch_size) {
@@ -594,7 +587,6 @@ static int saia_start_audit_async(int mode, int scan_mode, int threads, int port
     launch->port_batch_size = port_batch_size;
     g_audit_running = 1;
 
-#ifdef _WIN32
     uintptr_t tid = _beginthreadex(NULL, 0, saia_audit_thread_entry, launch, 0, NULL);
     if (tid == 0) {
         g_audit_running = 0;
@@ -602,18 +594,10 @@ static int saia_start_audit_async(int mode, int scan_mode, int threads, int port
         return -1;
     }
     CloseHandle((HANDLE)tid);
-#else
-    pthread_t tid;
-    if (pthread_create(&tid, NULL, saia_audit_thread_entry, launch) != 0) {
-        g_audit_running = 0;
-        free(launch);
-        return -1;
-    }
-    pthread_detach(tid);
-#endif
 
     return 0;
 }
+#endif
 
 static int saia_get_total_memory_mb(void) {
 #ifdef _WIN32
@@ -834,7 +818,11 @@ static int saia_count_process_saia(void) {
     return -1;
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+static void __attribute__((unused)) saia_vps_realtime_panel(void) {
+#else
 static void saia_vps_realtime_panel(void) {
+#endif
     while (g_running) {
         int cpu = saia_get_cgroup_cpu_pct();
         if (cpu < 0) cpu = get_cpu_usage();

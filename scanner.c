@@ -72,14 +72,6 @@ static int clamp_positive_threads(int threads) {
     return (threads > 0) ? threads : 1;
 }
 
-static int verify_reserved_threads(void) {
-    int total = clamp_positive_threads(g_config.threads);
-    int reserve = (total * 30 + 99) / 100; /* ceil(total * 0.3) */
-    if (reserve < 1) reserve = 1;
-    if (reserve > total) reserve = total;
-    return reserve;
-}
-
 static void scanner_set_progress_token(const char *ip, uint16_t port, const char *user, const char *pass) {
     (void)ip;
     (void)port;

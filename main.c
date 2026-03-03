@@ -576,15 +576,6 @@ static void saia_print_dual_panel_line(const char *bdr, const char *left, const 
     printf(" ┃%s\n", C_RESET);
 }
 
-static void saia_print_panel_line(const char *bdr, const char *text, int inner) {
-    int maxw = inner - 2;
-    int tw = saia_text_display_width(text);
-    if (tw > maxw) tw = maxw;
-    int pad = maxw - tw;
-    if (pad < 0) pad = 0;
-    printf("%s┃ %s%*s ┃%s\n", bdr, text, pad, "", C_RESET);
-}
-
 static size_t saia_count_file_lines(const char *path) {
     char **lines = NULL;
     size_t lc = 0;
@@ -1911,58 +1902,6 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
     if (file_exists(file_path)) {
         file_remove(file_path);
     }
-    rename(tmp_path, file_path);
-    return count;
-}
-
-static int saia_write_tokens_single_paste(const char *file_path, int append_mode) {
-    if (!file_path || !*file_path) return -1;
-
-    char tmp_path[4096];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", file_path);
-
-    FILE *fp = fopen(tmp_path, "w");
-    if (!fp) return -1;
-
-    if (append_mode && file_exists(file_path)) {
-        char *content = file_read_all(file_path);
-        if (content) {
-            fprintf(fp, "%s", content);
-            size_t len = strlen(content);
-            if (len > 0 && content[len - 1] != '\n') {
-                fprintf(fp, "\n");
-            }
-            free(content);
-        }
-    }
-
-    char buffer[262144];
-    if (!fgets(buffer, sizeof(buffer), stdin)) {
-        fclose(fp);
-        if (file_exists(tmp_path)) file_remove(tmp_path);
-        return -1;
-    }
-
-    char *comment = strchr(buffer, '#');
-    if (comment) *comment = '\0';
-
-    buffer[strcspn(buffer, "\n")] = '\0';
-    char *trimmed = str_trim(buffer);
-
-    int count = 0;
-    if (trimmed && strlen(trimmed) > 0) {
-        char *token = strtok(trimmed, " \t\n,;|");
-        while (token != NULL) {
-            if (strlen(token) > 0) {
-                fprintf(fp, "%s\n", token);
-                count++;
-            }
-            token = strtok(NULL, " \t\n,;|");
-        }
-    }
-
-    fclose(fp);
-    if (file_exists(file_path)) file_remove(file_path);
     rename(tmp_path, file_path);
     return count;
 }
