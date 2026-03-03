@@ -65,7 +65,9 @@ fi
 
 # Clean legacy broken autostart line if manager script no longer exists
 if [[ ! -f "$HOME/saia/saia_manager.sh" ]] && grep -q 'saia_manager.sh' "$HOME/.bashrc" 2>/dev/null; then
-  sed -i '\|saia_manager.sh|d' "$HOME/.bashrc"
+  tmp_bashrc="$(mktemp)"
+  awk '!/saia_manager\.sh/' "$HOME/.bashrc" > "$tmp_bashrc"
+  mv "$tmp_bashrc" "$HOME/.bashrc"
 fi
 
 if ! command -v cc >/dev/null 2>&1; then
