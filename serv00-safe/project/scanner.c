@@ -119,11 +119,8 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
         return 0;
     }
     
-    // 1. 初始握手
-    char handshake[] = {0x05, 0x01, 0x00}; // 无认证
-    if (user && pass && strlen(user) > 0 && strcmp(user, "-") != 0) {
-        handshake[2] = 0x02; // 用户名密码认证
-    }
+    // 1. 初始握手 — 始终提供 no-auth + user/pass 两种方法，与指纹检测一致
+    char handshake[] = {0x05, 0x02, 0x00, 0x02}; // 2 个方法: no-auth(0x00) + user/pass(0x02)
     
     if (socket_send_all(fd, handshake, sizeof(handshake), timeout_ms) < 0) {
         socket_close(fd);
@@ -258,11 +255,9 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
 
     if (total > 0) {
         http_resp[total] = '\0';
-        // 只要收到任何合法 HTTP 响应就认为代理真实有效
+        // 只匹配标准 HTTP 响应行前缀，避免纯数字误匹配
         if (strstr(http_resp, "HTTP/1.1") || strstr(http_resp, "HTTP/1.0") ||
-            strstr(http_resp, "cloudflare") || strstr(http_resp, "Cloudflare") ||
-            strstr(http_resp, "301") || strstr(http_resp, "200") ||
-            strstr(http_resp, "302") || strstr(http_resp, "403")) {
+            strstr(http_resp, "HTTP/2")) {
             return 1;
         }
     }
@@ -379,10 +374,14 @@ static int xui_match_page_fingerprint(const http_response_t *res) {
         return 1;
     }
 
+    /* 泛用登录页需要额外的 XUI 特征确认，避免误匹配 WordPress / phpMyAdmin 等 */
     if (contains_ci(h, "/login") || contains_ci(b, "/login")) {
-        if (contains_ci(h, "username") || contains_ci(b, "username") ||
-            contains_ci(h, "password") || contains_ci(b, "password") ||
-            contains_ci(h, "signin") || contains_ci(b, "signin")) {
+        int has_form = (contains_ci(h, "username") || contains_ci(b, "username") ||
+                        contains_ci(h, "password") || contains_ci(b, "password"));
+        int has_xui_hint = (contains_ci(b, "vue") || contains_ci(b, "ant-design") ||
+                            contains_ci(b, "element-ui") || contains_ci(b, "/xui") ||
+                            contains_ci(h, "/xui"));
+        if (has_form && has_xui_hint) {
             return 1;
         }
     }
@@ -494,8 +493,36 @@ int verify_xui(const char *ip, uint16_t port, const char *user, const char *pass
         }
     }
 
-    char data[768];
-    snprintf(data, sizeof(data), "username=%s&password=%s", user, pass);
+    /* 简易 URL 编码，避免特殊字符破坏 POST 数据 */
+    char enc_user[512], enc_pass[512];
+    {
+        const char *hex = "0123456789ABCDEF";
+        size_t ui = 0, pi = 0;
+        for (const char *p = user; *p && ui + 3 < sizeof(enc_user); p++) {
+            unsigned char c = (unsigned char)*p;
+            if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+                enc_user[ui++] = (char)c;
+            } else {
+                enc_user[ui++] = '%';
+                enc_user[ui++] = hex[(c >> 4) & 0xF];
+                enc_user[ui++] = hex[c & 0xF];
+            }
+        }
+        enc_user[ui] = '\0';
+        for (const char *p = pass; *p && pi + 3 < sizeof(enc_pass); p++) {
+            unsigned char c = (unsigned char)*p;
+            if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+                enc_pass[pi++] = (char)c;
+            } else {
+                enc_pass[pi++] = '%';
+                enc_pass[pi++] = hex[(c >> 4) & 0xF];
+                enc_pass[pi++] = hex[c & 0xF];
+            }
+        }
+        enc_pass[pi] = '\0';
+    }
+    char data[1536];
+    snprintf(data, sizeof(data), "username=%s&password=%s", enc_user, enc_pass);
 
     for (size_t c = 0; c < cand_count; c++) {
         char login_url[320];
@@ -666,11 +693,18 @@ static void scanner_report_found_open(const worker_arg_t *task) {
             detail = "端口开放(无S5特征)";
         }
     } else if (task->work_mode == MODE_DEEP) {
-        if (task->xui_fingerprint_ok > 0) {
+        int deep_xui = (task->xui_fingerprint_ok > 0);
+        int deep_s5  = (task->s5_fingerprint_ok > 0);
+        if (deep_xui && deep_s5) {
+            /* 双命中：先写 XUI 记录，S5 记录在下方 service_hit 之后额外追加 */
             tag = "[XUI_FOUND]";
             cand_type = "xui";
             detail = "端口开放 + XUI特征命中";
-        } else if (task->s5_fingerprint_ok > 0) {
+        } else if (deep_xui) {
+            tag = "[XUI_FOUND]";
+            cand_type = "xui";
+            detail = "端口开放 + XUI特征命中";
+        } else if (deep_s5) {
             tag = "[S5_FOUND]";
             cand_type = "s5";
             if (task->s5_method == 0x00) {
@@ -712,6 +746,29 @@ static void scanner_report_found_open(const worker_arg_t *task) {
         snprintf(stage_line, sizeof(stage_line), "%s:%d|type=%s|source=stage1\n",
                  task->ip, task->port, cand_type);
         file_append(stage1_file, stage_line);
+    }
+
+    /* DEEP 模式双命中时，额外追加 S5 记录 */
+    if (task->work_mode == MODE_DEEP && task->xui_fingerprint_ok > 0 && task->s5_fingerprint_ok > 0) {
+        const char *s5_detail;
+        if (task->s5_method == 0x00) {
+            s5_detail = "[节点-可连通] S5-OPEN";
+        } else if (task->s5_method == 0x02) {
+            s5_detail = "[资产-加密节点] S5-AUTH";
+        } else if (task->s5_method == 0xFF) {
+            s5_detail = "[节点-可连通] S5-UNSUPPORTED-METHOD";
+        } else {
+            s5_detail = "端口开放 + S5特征命中";
+        }
+        char s5_line[1024];
+        snprintf(s5_line, sizeof(s5_line), "[S5_FOUND] %s:%d | %s", task->ip, task->port, s5_detail);
+        scanner_report_write_line_locked(s5_line);
+        char stage1_file2[MAX_PATH_LENGTH];
+        snprintf(stage1_file2, sizeof(stage1_file2), "%s/stage1_candidates.list", g_config.base_dir);
+        char stage_line2[256];
+        snprintf(stage_line2, sizeof(stage_line2), "%s:%d|type=s5|source=stage1\n", task->ip, task->port);
+        file_append(stage1_file2, stage_line2);
+        printf("\n%s%s%s\n", C_CYAN, s5_line, C_RESET);
     }
 
     printf("\n%s%s%s\n", C_CYAN, result_line, C_RESET);
@@ -858,7 +915,7 @@ static void format_verified_from_report_line(const char *line, char *out, size_t
 
     const char *u = strstr(line, "账号:");
     if (u) {
-        u += 5;
+        u += strlen("账号:");
         size_t i = 0;
         while (u[i] && u[i] != '|' && !isspace((unsigned char)u[i]) && i + 1 < sizeof(user)) {
             user[i] = u[i];
@@ -869,7 +926,7 @@ static void format_verified_from_report_line(const char *line, char *out, size_t
 
     const char *pw = strstr(line, "密码:");
     if (pw) {
-        pw += 5;
+        pw += strlen("密码:");
         size_t i = 0;
         while (pw[i] && pw[i] != '|' && !isspace((unsigned char)pw[i]) && i + 1 < sizeof(pass)) {
             pass[i] = pw[i];
@@ -1038,10 +1095,6 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
     int xui_fingerprint_ok = task->xui_fingerprint_ok;
     int s5_fingerprint_ok = task->s5_fingerprint_ok;
     int s5_method = task->s5_method;
-    if (xui_fingerprint_ok < 0 &&
-        (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY)) {
-        xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 3000);
-    }
 
     if (task->work_mode == MODE_S5) {
         if (s5_fingerprint_ok == 0) {
@@ -1349,38 +1402,6 @@ void *worker_thread(void *arg) {
     worker_arg_t *task = (worker_arg_t *)arg;
     // 更新扫描统计
     SAIA_ATOMIC_ADD_U64(&g_state.total_scanned, 1);
-    
-    // 1. 端口连通性检查
-    int fd = socket_create(0, 0);
-    if (fd < 0) {
-        saia_sleep(5);
-        worker_arg_release(task);
-        SAIA_ATOMIC_DEC_INT(&running_threads);
-#ifdef _WIN32
-        return 0;
-#else
-        return NULL;
-#endif
-    }
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(task->port);
-    inet_pton(AF_INET, task->ip, &addr.sin_addr);
-    
-    int connect_timeout_ms = g_config.timeout > 0 ? (g_config.timeout * 1000) : 500;
-    if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), connect_timeout_ms) != 0) {
-        socket_close(fd);
-        worker_arg_release(task);
-        SAIA_ATOMIC_DEC_INT(&running_threads);
-        
-        #ifdef _WIN32
-        return 0;
-        #else
-        return NULL;
-        #endif
-    }
-    socket_close(fd);
 
     /* scan_mode: 1=探索(只扫描存活), 2=探索+验真, 3=只留极品(只保留验证通过的) */
     int do_verify = (g_config.scan_mode >= SCAN_EXPLORE_VERIFY);
@@ -1890,7 +1911,7 @@ static int iterate_expanded_targets(const char *raw_target,
 // 启动扫描 — 流式展开 IP 段，逐个投喂线程池（对齐 DEJI.py iter_expanded_targets 逻辑）
 void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *creds, size_t cred_count, uint16_t *ports, size_t port_count) {
     init_locks();
-    scanner_start_verify_pool(8);
+    scanner_start_verify_pool(g_config.threads);
     printf("开始扫描... 总节点: %zu, 总端口: %zu\n", node_count, port_count);
     
     size_t node_idx = 0;
@@ -2095,8 +2116,7 @@ void scanner_start_streaming(const char *targets_file,
         return;
     }
 
-    scanner_start_verify_pool(8);
-
+    /* 先清空旧的验真队列，再启动线程池，避免竞态 */
     MUTEX_LOCK(lock_stats);
     while (verify_head) {
         verify_task_t *next = verify_head->next;
@@ -2109,6 +2129,8 @@ void scanner_start_streaming(const char *targets_file,
     feeding_in_progress = 0;
     snprintf(progress_token, sizeof(progress_token), "-");
     MUTEX_UNLOCK(lock_stats);
+
+    scanner_start_verify_pool(g_config.threads);
 
     /* 快速估算总目标数 — 文件流式读取，不整体加载到内存 */
     size_t est_total = scanner_estimate_targets_from_file(targets_file);
